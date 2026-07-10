@@ -1,6 +1,3 @@
 {
-  "variants": {
-    "blueprint=false": { "model": "maidmorework:block/sp_block" },
-    "blueprint=true": { "model": "minecraft:block/glass" }
-  }
+  "neoforge:definition_type": "maidmorework:sp_definition"
 }
