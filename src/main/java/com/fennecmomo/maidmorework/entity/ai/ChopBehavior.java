@@ -5,6 +5,7 @@ import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.spblock.SPBlockManager;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
@@ -30,7 +31,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
     private int currentIndex = 0;
     private int chopTimer = 0;
     private boolean reachedTree = false;
-    private int navFailCount = 0;
 
     public ChopBehavior()
     {
@@ -40,14 +40,23 @@ public class ChopBehavior extends Behavior<EntityMaid>
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
-        return maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get()).isPresent();
+        Optional<List<BlockPos>> blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
+        boolean hasBlocks = blocks.isPresent() && !blocks.get().isEmpty();
+        LOGGER.info("ChopBehavior checkExtraStart: hasBlocks={} size={} maid={}",
+                hasBlocks, blocks.map(List::size).orElse(0), maid.getId());
+        return hasBlocks;
     }
 
     @Override
     protected boolean canStillUse(ServerLevel level, EntityMaid maid, long time)
     {
         Optional<List<BlockPos>> blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
-        return blocks.isPresent() && !blocks.get().isEmpty();
+        boolean stillUse = blocks.isPresent() && !blocks.get().isEmpty();
+        if (!stillUse)
+        {
+            LOGGER.info("ChopBehavior canStillUse=false: blocks empty or absent maid={}", maid.getId());
+        }
+        return stillUse;
     }
 
     @Override
@@ -58,7 +67,20 @@ public class ChopBehavior extends Behavior<EntityMaid>
         currentIndex = 0;
         chopTimer = 0;
         reachedTree = false;
-        navFailCount = 0;
+
+        // 持久化恢复后验证：检查树脚方块是否还是原木，不是就清空重新搜索
+        Optional<List<BlockPos>> blocksOpt = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
+        if (blocksOpt.isPresent() && !blocksOpt.get().isEmpty())
+        {
+            BlockPos treeBase = findTreeBase(blocksOpt.get());
+            if (!level.getBlockState(treeBase).is(net.minecraft.tags.BlockTags.LOGS))
+            {
+                LOGGER.info("ChopBehavior: persisted tree base {} is no longer a log, clearing memory", treeBase);
+                clearAllMemory(maid);
+                maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
+                maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
+            }
+        }
     }
 
     @Override
@@ -94,23 +116,45 @@ public class ChopBehavior extends Behavior<EntityMaid>
             {
                 if (!maid.getNavigation().isInProgress())
                 {
-                    boolean found = maid.getNavigation().moveTo(
-                            treeBase.getX() + 0.5, maid.getY(), treeBase.getZ() + 0.5, WALK_SPEED);
-                    if (!found)
+                    // 找树脚旁边可站立的位置，不往原木里面导航
+                    BlockPos walkTarget = findWalkTarget(level, treeBase);
+                    LOGGER.info("ChopBehavior navigating: treeBase={} walkTarget={} below={} distSq={} maidPos={} maid={}",
+                            treeBase, walkTarget, level.getBlockState(walkTarget.below()),
+                            String.format("%.1f", distSq),
+                            maid.blockPosition(), maid.getId());
+                    boolean moved = maid.getNavigation().moveTo(
+                            walkTarget.getX() + 0.5, walkTarget.getY(),
+                            walkTarget.getZ() + 0.5, WALK_SPEED);
+                    if (!moved)
                     {
-                        navFailCount++;
-                        if (navFailCount > 3)
+                        LOGGER.warn("ChopBehavior moveTo FAILED: walkTarget={} maid={}", walkTarget, maid.getId());
+                        // 导航走不动但已经离树脚不到5格，直接开砍
+                        if (distSq < 25.0)
                         {
+                            LOGGER.info("ChopBehavior: close enough despite nav failure, starting chop maid={}", maid.getId());
                             reachedTree = true;
                             SPBlockManager.replaceBlocks(level, blocks, maid.getUUID());
-                            Optional<List<BlockPos>> leavesOpt2 = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
-                            if (leavesOpt2.isPresent() && !leavesOpt2.get().isEmpty())
+                            Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
+                            if (leavesOpt.isPresent() && !leavesOpt.get().isEmpty())
                             {
-                                SPBlockManager.replaceBlocks(level, leavesOpt2.get(), maid.getUUID());
+                                SPBlockManager.replaceBlocks(level, leavesOpt.get(), maid.getUUID());
                             }
-                            LOGGER.info("ChopBehavior: nav failed, chopping in place maid={}", maid.getId());
+                        }
+                        else
+                        {
+                            // 离太远导航不到，放弃这棵重新搜索
+                            LOGGER.info("ChopBehavior: too far and nav failed, discarding tree maid={}", maid.getId());
+                            clearAllMemory(maid);
+                            maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
+                            maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
+                            return;
                         }
                     }
+                }
+                else
+                {
+                    LOGGER.info("ChopBehavior nav in progress: distSq={} maidPos={} maid={}",
+                            String.format("%.1f", distSq), maid.blockPosition(), maid.getId());
                 }
                 return;
             }
@@ -210,7 +254,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
         currentIndex = 0;
         chopTimer = 0;
         reachedTree = false;
-        navFailCount = 0;
     }
 
     private void equipAxe(EntityMaid maid)
@@ -249,6 +292,48 @@ public class ChopBehavior extends Behavior<EntityMaid>
             }
         }
         return base;
+    }
+
+    // 在树脚周围5格范围内找离树脚最近的可站立位置（空气+脚下实心）
+    private BlockPos findWalkTarget(ServerLevel level, BlockPos treeBase)
+    {
+        BlockPos best = null;
+        int bestDist = Integer.MAX_VALUE;
+
+        // 螺旋 BFS 搜树脚周围5格，按切比雪夫距离选最近树脚的
+        Set<BlockPos> visited = new HashSet<>();
+        Deque<BlockPos> queue = new ArrayDeque<>();
+        queue.add(treeBase);
+        visited.add(treeBase);
+
+        while (!queue.isEmpty())
+        {
+            BlockPos p = queue.poll();
+            int dx = Math.abs(p.getX() - treeBase.getX());
+            int dz = Math.abs(p.getZ() - treeBase.getZ());
+            if (dx > 5 || dz > 5) continue;
+
+            if (level.getBlockState(p).isAir() && level.getBlockState(p.below()).isSolid())
+            {
+                int dist = dx + dz + Math.abs(p.getY() - treeBase.getY());
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = p;
+                }
+            }
+
+            for (Direction d : new Direction[]{Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST})
+            {
+                BlockPos nb = p.relative(d);
+                if (visited.add(nb))
+                {
+                    queue.add(nb);
+                }
+            }
+        }
+
+        return best != null ? best : treeBase.below();
     }
 
     private void clearAllMemory(EntityMaid maid)
