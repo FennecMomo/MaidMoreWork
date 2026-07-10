@@ -4,10 +4,10 @@ import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
-// 区域检索方法。SearchBehavior 每到一个区域就调用一次。
-// @return true=找到目标，false=继续搜
+// 单点检索方法。SearchBehavior 螺旋遍历每个坐标点，每点调用一次
+// 找到目标就把结果写进 Memory 并返回 true
 @FunctionalInterface
 public interface ISearchAction
 {
-    boolean search(ServerLevel level, BlockPos center, int halfXZ, int yDown, int yUp, EntityMaid maid);
+    boolean search(ServerLevel level, BlockPos point, EntityMaid maid);
 }
