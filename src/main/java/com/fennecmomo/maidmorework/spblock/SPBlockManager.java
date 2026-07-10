@@ -3,6 +3,7 @@ package com.fennecmomo.maidmorework.spblock;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -91,7 +92,7 @@ public class SPBlockManager
         return false;
     }
 
-    // 销毁蓝图状态的SPBlock，掉落物给指定实体
+    // 销毁蓝图状态的SPBlock，掉落物放入实体背包
     public static boolean collectBlock(ServerLevel level, BlockPos pos, LivingEntity entity)
     {
         if (!isBlueprint(level, pos))
@@ -106,12 +107,57 @@ public class SPBlockManager
         BlockState originalState = spbe.getOriginalState();
         // 先还原回原始方块
         level.setBlockAndUpdate(pos, originalState);
-        // 触发原始方块的销毁，生成粒子、音效、掉落物
-        Block.dropResources(originalState, level, pos, null, entity, entity.getMainHandItem());
+        // 获取掉落物列表
+        List<ItemStack> drops = Block.getDrops(originalState, level, pos,
+                level.getBlockEntity(pos), entity, entity.getMainHandItem());
+        // 尝试放入实体背包
+        for (ItemStack stack : drops)
+        {
+            addToInventory(entity, stack.copy());
+        }
         level.destroyBlock(pos, false, entity);
         level.gameEvent(GameEvent.BLOCK_DESTROY, pos, GameEvent.Context.of(originalState));
         level.playSound(null, pos, SoundType.WOOD.getBreakSound(), net.minecraft.sounds.SoundSource.BLOCKS, 1f, 1f);
         return true;
+    }
+
+    // 尝试把物品放入实体背包，放不下的丢在地上
+    private static void addToInventory(LivingEntity entity, ItemStack stack)
+    {
+        if (stack.isEmpty())
+        {
+            return;
+        }
+        // 女仆用ItemManager背包
+        if (entity instanceof com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid maid)
+        {
+            net.neoforged.neoforge.transfer.item.ItemStacksResourceHandler inv =
+                    maid.getItemManager().getMaidInv();
+            net.neoforged.neoforge.transfer.item.ItemResource resource =
+                    net.neoforged.neoforge.transfer.item.ItemResource.of(stack);
+            int remaining = stack.getCount();
+            try (net.neoforged.neoforge.transfer.transaction.Transaction tx =
+                    net.neoforged.neoforge.transfer.transaction.Transaction.openRoot())
+            {
+                for (int i = 0; i < inv.size() && remaining > 0; i++)
+                {
+                    remaining -= inv.insert(i, resource, remaining, tx);
+                }
+                tx.commit();
+            }
+            if (remaining > 0)
+            {
+                entity.spawnAtLocation(
+                        (net.minecraft.server.level.ServerLevel) entity.level(),
+                        new ItemStack(stack.getItem(), remaining));
+            }
+        }
+        else
+        {
+            entity.spawnAtLocation(
+                    (net.minecraft.server.level.ServerLevel) entity.level(),
+                    stack.copy());
+        }
     }
 
     // 把单个SPBlock还原回原始方块
