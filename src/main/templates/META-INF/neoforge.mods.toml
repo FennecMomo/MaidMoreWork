@@ -1,0 +1,27 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "${mod_license}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+description = '''
+TLM 行为包拓展 — 女仆的更多工作。
+提供砍树、检索、拾取等加权行为。
+依赖 TLM（Touhou Little Maid）。
+'''
+
+[[dependencies.${mod_id}]]
+modId = "touhou_little_maid"
+type = "required"
+versionRange = "[2.0.0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "momolib"
+type = "required"
+versionRange = "[0.0.1,)"
+ordering = "NONE"
+side = "BOTH"

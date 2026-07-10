@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "blueprint=false": { "model": "maidmorework:block/sp_block" },
+    "blueprint=true": { "model": "minecraft:block/glass" }
+  }
+}
