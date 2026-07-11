@@ -39,4 +39,12 @@ public class ModMemories
     // 初始化标记（抵达树脚后排序标记，false=未排序，true=已排序）
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<Boolean>> LOG_INITIALIZED =
             MEMORY_MODULE_TYPES.register("log_initialized", () -> new MemoryModuleType<>(Optional.empty()));
+
+    // 当前工作行为描述（如"砍树"、"挖矿"），供通用 SearchBehavior 拼气泡文案
+    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<String>> WORK_ACTION =
+            MEMORY_MODULE_TYPES.register("work_action", () -> new MemoryModuleType<>(Optional.empty()));
+
+    // 当前工作目标描述（如"原木"、"矿石"），供通用 SearchBehavior 拼气泡文案
+    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<String>> WORK_TARGET =
+            MEMORY_MODULE_TYPES.register("work_target", () -> new MemoryModuleType<>(Optional.empty()));
 }

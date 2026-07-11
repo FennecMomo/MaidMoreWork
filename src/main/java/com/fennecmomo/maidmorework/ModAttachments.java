@@ -63,4 +63,46 @@ public class ModAttachments
                                 }
                             })
                             .build());
+
+    // 工作行为描述持久化（如"砍树"、"挖矿"）
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<String>> WORK_ACTION_SAVED =
+            ATTACHMENT_TYPES.register("work_action_saved", () ->
+                    AttachmentType.builder(() -> "")
+                            .serialize(new IAttachmentSerializer<String>()
+                            {
+                                @Override
+                                public String read(IAttachmentHolder holder, ValueInput input)
+                                {
+                                    return input.getStringOr("action", "");
+                                }
+
+                                @Override
+                                public boolean write(String data, ValueOutput output)
+                                {
+                                    output.putString("action", data);
+                                    return true;
+                                }
+                            })
+                            .build());
+
+    // 工作目标描述持久化（如"原木"、"矿石"）
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<String>> WORK_TARGET_SAVED =
+            ATTACHMENT_TYPES.register("work_target_saved", () ->
+                    AttachmentType.builder(() -> "")
+                            .serialize(new IAttachmentSerializer<String>()
+                            {
+                                @Override
+                                public String read(IAttachmentHolder holder, ValueInput input)
+                                {
+                                    return input.getStringOr("target", "");
+                                }
+
+                                @Override
+                                public boolean write(String data, ValueOutput output)
+                                {
+                                    output.putString("target", data);
+                                    return true;
+                                }
+                            })
+                            .build());
 }

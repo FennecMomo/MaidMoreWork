@@ -19,7 +19,9 @@ public class LoggingExtraBrain implements IExtraMaidBrain
                 ModMemories.SCAFFOLDING_BLOCKS.get(),
                 ModMemories.LOG_TARGET.get(),
                 ModMemories.CHOP_TIMER.get(),
-                ModMemories.LOG_INITIALIZED.get()
+                ModMemories.LOG_INITIALIZED.get(),
+                ModMemories.WORK_ACTION.get(),
+                ModMemories.WORK_TARGET.get()
         );
     }
 }

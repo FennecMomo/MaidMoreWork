@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework.entity.ai;
 
+import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -25,7 +26,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private static final double WALK_SPEED = 0.3;
     // 气泡框冷却 key，防止反复刷屏
     private static final long FOLLOW_WARN_KEY = 9527L;
-    private static final long NO_TREE_KEY = 9528L;
+    private static final long NO_RESOURCE_KEY = 9528L;
     // 每 tick 处理的螺旋点数
     private static final int SPIRAL_BATCH = 100;
     // 家园模式下螺旋耗尽后的静默 tick 数（与气泡显示时长一致）
@@ -67,16 +68,19 @@ public class SearchBehavior extends Behavior<EntityMaid>
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
-        // 跟随状态下不执行伐木，气泡框提示
-        if (!maid.isHomeModeEnable() && maid.canBrainMoving())
-        {
-            maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
-                    "跟随模式下无法伐木，请切换到待机或家园模式", FOLLOW_WARN_KEY);
-            return false;
-        }
-        // 静默中不启动
+        // 静默中不启动（每 tick 递减）
         if (silenceTicks > 0)
         {
+            silenceTicks--;
+            return false;
+        }
+        // 跟随状态下不执行工作，气泡框提示后进静默
+        if (!maid.isHomeModeEnable() && maid.canBrainMoving())
+        {
+            String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("工作");
+            maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
+                    "跟随模式下无法" + action + "，请切换到待机或家园模式", FOLLOW_WARN_KEY);
+            silenceTicks = SILENCE_TICKS;
             return false;
         }
         // 如果目标Memory非空（可能刚从Attachment恢复），不启动
@@ -146,8 +150,9 @@ public class SearchBehavior extends Behavior<EntityMaid>
             if (useHomeRestriction && maid.hasHome())
             {
                 silenceTicks = SILENCE_TICKS;
+                String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
                 maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
-                        "家园范围内没有可用的树", NO_TREE_KEY);
+                        "家园范围内没有可用的" + target, NO_RESOURCE_KEY);
                 LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
                         SILENCE_TICKS, maid.getId());
             }

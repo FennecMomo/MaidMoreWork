@@ -43,6 +43,13 @@ public class LoggingTask implements IMaidTask
     @Override
     public List<Pair<Integer, BehaviorControl<? super EntityMaid>>> createBrainTasks(EntityMaid maid)
     {
+        // 写入工作关键词，供 SearchBehavior 拼气泡文案
+        maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), "砍树");
+        maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), "原木");
+        // 同步写 Attachment，退出重进后恢复
+        maid.setData(ModAttachments.WORK_ACTION_SAVED, "砍树");
+        maid.setData(ModAttachments.WORK_TARGET_SAVED, "原木");
+
         List<Pair<Integer, BehaviorControl<? super EntityMaid>>> tasks = new ArrayList<>();
         // SearchBehavior 负责螺旋遍历坐标，每个坐标点调用 scanForTree 检查
         // 15: XZ 半径, 1: Y 向下, 14: Y 向上

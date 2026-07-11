@@ -55,6 +55,13 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 {
                     maid.getBrain().setMemory(ModMemories.LEAVES_BLOCKS.get(), new ArrayList<>(savedLeaves));
                 }
+                // 恢复工作关键词
+                String savedAction = maid.getData(ModAttachments.WORK_ACTION_SAVED);
+                if (savedAction != null && !savedAction.isEmpty())
+                    maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), savedAction);
+                String savedTarget = maid.getData(ModAttachments.WORK_TARGET_SAVED);
+                if (savedTarget != null && !savedTarget.isEmpty())
+                    maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), savedTarget);
                 blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
             }
         }
@@ -384,5 +391,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
         maid.getBrain().eraseMemory(ModMemories.LOG_INITIALIZED.get());
         maid.getBrain().eraseMemory(ModMemories.LEAVES_BLOCKS.get());
         maid.getBrain().eraseMemory(ModMemories.SCAFFOLDING_BLOCKS.get());
+        // 关键词不清，切任务前一直保留
     }
 }
