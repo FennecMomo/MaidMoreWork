@@ -28,8 +28,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private static final long NO_TREE_KEY = 9528L;
     // 每 tick 处理的螺旋点数
     private static final int SPIRAL_BATCH = 100;
-    // 家园模式下螺旋耗尽后的静默 tick 数
-    private static final int SILENCE_TICKS = 1000;
+    // 家园模式下螺旋耗尽后的静默 tick 数（与气泡显示时长一致）
+    private static final int SILENCE_TICKS = 15 * 20;
     // 家园模式 Y 轴扩展范围
     private static final int HOME_Y_RANGE = 16;
 

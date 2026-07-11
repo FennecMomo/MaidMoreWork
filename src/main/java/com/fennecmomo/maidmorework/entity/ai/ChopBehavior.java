@@ -138,10 +138,18 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 {
                     // 找树脚旁边可站立的位置，不往原木里面导航
                     BlockPos walkTarget = findWalkTarget(level, treeBase);
-                    LOGGER.info("ChopBehavior navigating: treeBase={} walkTarget={} below={} distSq={} maidPos={} maid={}",
-                            treeBase, walkTarget, level.getBlockState(walkTarget.below()),
-                            String.format("%.1f", distSq),
-                            maid.blockPosition(), maid.getId());
+                    // 范围外不导航，防止被TLM拉回
+                    if (maid.hasHome() && !maid.isWithinHome(walkTarget))
+                    {
+                        LOGGER.info("ChopBehavior: walkTarget {} outside home, discarding tree maid={}",
+                                walkTarget, maid.getId());
+                        clearAllMemory(maid);
+                        maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
+                        maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
+                        return;
+                    }
+                    LOGGER.info("ChopBehavior navigating: treeBase={} walkTarget={} distSq={} maid={}",
+                            treeBase, walkTarget, String.format("%.1f", distSq), maid.getId());
                     boolean moved = maid.getNavigation().moveTo(
                             walkTarget.getX() + 0.5, walkTarget.getY(),
                             walkTarget.getZ() + 0.5, WALK_SPEED);
