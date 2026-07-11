@@ -46,7 +46,7 @@ public class LoggingTask implements IMaidTask
         List<Pair<Integer, BehaviorControl<? super EntityMaid>>> tasks = new ArrayList<>();
         // SearchBehavior 负责螺旋遍历坐标，每个坐标点调用 scanForTree 检查
         // 15: XZ 半径, 1: Y 向下, 14: Y 向上
-        tasks.add(Pair.of(5, new SearchBehavior(this::scanForTree, ModMemories.LOG_BLOCKS.get(), 15, 1, 14)));
+        tasks.add(Pair.of(5, new SearchBehavior(this::scanForTree, ModMemories.LOG_BLOCKS.get(), 15, 1, 14, true)));
         tasks.add(Pair.of(6, new ChopBehavior()));
         return tasks;
     }

@@ -13,7 +13,7 @@ import java.util.*;
 // 通用螺旋搜索行为
 // 从女仆当前位置出发，按切比雪夫距离逐层向外螺旋遍历坐标点
 // 每点调用一次 scanAction，找到后写 Memory 并返回 true
-// 螺旋范围耗尽后随机游荡到远处重新开始
+// useHomeRestriction=true 时搜索范围限定在家园范围内（Y±16），耗尽后静默等待
 // 零实例业务状态，所有协调通过 Memory 完成
 public class SearchBehavior extends Behavior<EntityMaid>
 {
@@ -25,25 +25,34 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private static final double WALK_SPEED = 0.3;
     // 气泡框冷却 key，防止反复刷屏
     private static final long FOLLOW_WARN_KEY = 9527L;
+    private static final long NO_TREE_KEY = 9528L;
     // 每 tick 处理的螺旋点数
     private static final int SPIRAL_BATCH = 100;
+    // 家园模式下螺旋耗尽后的静默 tick 数
+    private static final int SILENCE_TICKS = 1000;
+    // 家园模式 Y 轴扩展范围
+    private static final int HOME_Y_RANGE = 16;
 
     private final ISearchAction scanAction;
     private final MemoryModuleType<?> targetMemory;
     private final int scanHalfXZ;
     private final int scanYDown;
     private final int scanYUp;
+    private final boolean useHomeRestriction;
 
     // 螺旋状态
     private BlockPos spiralOrigin = null;
     private Deque<BlockPos> spiralQueue = null;
     private Set<BlockPos> spiralVisited = null;
+    // 家园限制下的静默倒计时
+    private int silenceTicks = 0;
 
     // scanAction: 单点检索方法，找到目标后写 Memory 并返回 true
     // targetMemory: 目标 Memory，为空时搜索行为可启动，有值时搜索行为结束
-    // scanHalfXZ/scanYDown/scanYUp: 螺旋搜索范围（以女仆位置为原点）
+    // scanHalfXZ/scanYDown/scanYUp: 螺旋搜索范围（以女仆位置为原点，非家园限制时使用）
+    // useHomeRestriction: 是否受家园范围限制，默认true
     public SearchBehavior(ISearchAction scanAction, MemoryModuleType<?> targetMemory,
-                          int scanHalfXZ, int scanYDown, int scanYUp)
+                          int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
     {
         super(Map.of(), Integer.MAX_VALUE);
         this.scanAction = scanAction;
@@ -51,9 +60,10 @@ public class SearchBehavior extends Behavior<EntityMaid>
         this.scanHalfXZ = scanHalfXZ;
         this.scanYDown = scanYDown;
         this.scanYUp = scanYUp;
+        this.useHomeRestriction = useHomeRestriction;
     }
 
-    // 启动条件：目标 Memory 为空且不处于跟随状态
+    // 启动条件：目标 Memory 为空、不处于跟随状态、不在静默中
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
@@ -64,7 +74,17 @@ public class SearchBehavior extends Behavior<EntityMaid>
                     "跟随模式下无法伐木，请切换到待机或家园模式", FOLLOW_WARN_KEY);
             return false;
         }
-        return maid.getBrain().getMemory(targetMemory).isEmpty();
+        // 静默中不启动
+        if (silenceTicks > 0)
+        {
+            return false;
+        }
+        // 如果目标Memory非空（可能刚从Attachment恢复），不启动
+        if (maid.getBrain().getMemory(targetMemory).isPresent())
+        {
+            return false;
+        }
+        return true;
     }
 
     // 继续条件：目标 Memory 仍为空（还没找到）
@@ -78,12 +98,20 @@ public class SearchBehavior extends Behavior<EntityMaid>
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
         LOGGER.info("SearchBehavior START maid={}", maid.getId());
+        silenceTicks = 0;
         resetSpiral(maid.blockPosition());
     }
 
     @Override
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
+        // 静默倒计时中，递减并跳过
+        if (silenceTicks > 0)
+        {
+            silenceTicks--;
+            return;
+        }
+
         // 正在导航中，等到了再搜
         if (maid.getNavigation().isInProgress()) return;
 
@@ -102,18 +130,32 @@ public class SearchBehavior extends Behavior<EntityMaid>
                 LOGGER.info("SearchBehavior: found target at {} maid={}", point, maid.getId());
                 return;
             }
-            expandSpiral(point);
+            expandSpiral(point, maid);
         }
 
-        // 螺旋范围耗尽，随机游荡到远处换地方搜
+        // 螺旋范围耗尽
         if (spiralQueue.isEmpty())
         {
-            LOGGER.info("SearchBehavior: spiral exhausted at {}, moving maid={}",
+            LOGGER.info("SearchBehavior: spiral exhausted at {}, maid={}",
                     spiralOrigin, maid.getId());
             spiralQueue = null;
             spiralVisited = null;
             spiralOrigin = null;
-            pickRandomAndMove(maid);
+
+            // 家园限制模式：静默等待，不随机游荡
+            if (useHomeRestriction && maid.hasHome())
+            {
+                silenceTicks = SILENCE_TICKS;
+                maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
+                        "家园范围内没有可用的树", NO_TREE_KEY);
+                LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
+                        SILENCE_TICKS, maid.getId());
+            }
+            else
+            {
+                // 非限制模式：随机游荡到远处换地方搜
+                pickRandomAndMove(maid);
+            }
         }
     }
 
@@ -125,6 +167,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralQueue = null;
         spiralVisited = null;
         spiralOrigin = null;
+        silenceTicks = 0;
     }
 
     // 以原点初始化螺旋队列
@@ -137,9 +180,13 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralVisited.add(origin);
     }
 
-    // 从当前点向 26 方向扩展螺旋，限制在搜索范围内
-    private void expandSpiral(BlockPos point)
+    // 从当前点向 26 方向扩展螺旋
+    // 家园限制模式下检查 isWithinRestriction + Y±16；否则用固定 scanHalfXZ/scanYDown/scanYUp
+    private void expandSpiral(BlockPos point, EntityMaid maid)
     {
+        boolean restricted = useHomeRestriction && maid.hasHome();
+        int centerY = restricted ? maid.getHomePosition().getY() : 0;
+
         for (int dx = -1; dx <= 1; dx++)
         {
             for (int dy = -1; dy <= 1; dy++)
@@ -150,13 +197,26 @@ public class SearchBehavior extends Behavior<EntityMaid>
                     BlockPos nb = point.offset(dx, dy, dz);
                     if (spiralVisited.add(nb))
                     {
-                        int relX = Math.abs(nb.getX() - spiralOrigin.getX());
-                        int relY = nb.getY() - spiralOrigin.getY();
-                        int relZ = Math.abs(nb.getZ() - spiralOrigin.getZ());
-                        if (relX <= scanHalfXZ && relZ <= scanHalfXZ
-                                && relY >= -scanYDown && relY <= scanYUp)
+                        if (restricted)
                         {
-                            spiralQueue.add(nb);
+                            // 家园限制：检查是否在范围内 + Y±16
+                            if (maid.isWithinHome(nb)
+                                    && nb.getY() >= centerY - HOME_Y_RANGE
+                                    && nb.getY() <= centerY + HOME_Y_RANGE)
+                            {
+                                spiralQueue.add(nb);
+                            }
+                        }
+                        else
+                        {
+                            int relX = Math.abs(nb.getX() - spiralOrigin.getX());
+                            int relY = nb.getY() - spiralOrigin.getY();
+                            int relZ = Math.abs(nb.getZ() - spiralOrigin.getZ());
+                            if (relX <= scanHalfXZ && relZ <= scanHalfXZ
+                                    && relY >= -scanYDown && relY <= scanYUp)
+                            {
+                                spiralQueue.add(nb);
+                            }
                         }
                     }
                 }
@@ -164,7 +224,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 选随机方向导航
+    // 选随机方向导航（非家园限制模式用）
     private void pickRandomAndMove(EntityMaid maid)
     {
         BlockPos here = maid.blockPosition();

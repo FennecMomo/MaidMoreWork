@@ -2,6 +2,7 @@ package com.fennecmomo.maidmorework.entity.ai;
 
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
+import com.fennecmomo.maidmorework.spblock.SPBlockEntity;
 import com.fennecmomo.maidmorework.spblock.SPBlockManager;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
@@ -41,6 +42,22 @@ public class ChopBehavior extends Behavior<EntityMaid>
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
         Optional<List<BlockPos>> blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
+        // Memory为空时尝试从Attachment恢复持久化数据
+        if (blocks.isEmpty() || blocks.get().isEmpty())
+        {
+            List<BlockPos> saved = maid.getData(ModAttachments.LOG_BLOCKS_SAVED);
+            List<BlockPos> savedLeaves = maid.getData(ModAttachments.LEAVES_BLOCKS_SAVED);
+            if (saved != null && !saved.isEmpty())
+            {
+                LOGGER.info("ChopBehavior: restored {} logs from attachment maid={}", saved.size(), maid.getId());
+                maid.getBrain().setMemory(ModMemories.LOG_BLOCKS.get(), new ArrayList<>(saved));
+                if (savedLeaves != null && !savedLeaves.isEmpty())
+                {
+                    maid.getBrain().setMemory(ModMemories.LEAVES_BLOCKS.get(), new ArrayList<>(savedLeaves));
+                }
+                blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
+            }
+        }
         boolean hasBlocks = blocks.isPresent() && !blocks.get().isEmpty();
         LOGGER.info("ChopBehavior checkExtraStart: hasBlocks={} size={} maid={}",
                 hasBlocks, blocks.map(List::size).orElse(0), maid.getId());
@@ -68,14 +85,17 @@ public class ChopBehavior extends Behavior<EntityMaid>
         chopTimer = 0;
         reachedTree = false;
 
-        // 持久化恢复后验证：检查树脚方块是否还是原木，不是就清空重新搜索
+        // 持久化恢复后验证：检查树脚方块是否还是原木或已被替换为SPBlock
+        // SPBlock也是有效目标，不能因为已替换就清空数据
         Optional<List<BlockPos>> blocksOpt = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
         if (blocksOpt.isPresent() && !blocksOpt.get().isEmpty())
         {
             BlockPos treeBase = findTreeBase(blocksOpt.get());
-            if (!level.getBlockState(treeBase).is(net.minecraft.tags.BlockTags.LOGS))
+            boolean stillValid = level.getBlockState(treeBase).is(net.minecraft.tags.BlockTags.LOGS)
+                    || level.getBlockState(treeBase).getBlock() instanceof com.fennecmomo.maidmorework.spblock.SPBlock;
+            if (!stillValid)
             {
-                LOGGER.info("ChopBehavior: persisted tree base {} is no longer a log, clearing memory", treeBase);
+                LOGGER.info("ChopBehavior: persisted tree base {} is no longer a log or SPBlock, clearing memory", treeBase);
                 clearAllMemory(maid);
                 maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
                 maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
@@ -167,6 +187,18 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
 
         BlockPos target = blocks.get(currentIndex);
+
+        // 检查是否已经被标记过蓝图，是就直接跳过不等待
+        if (level.getBlockEntity(target) instanceof SPBlockEntity spbe
+                && spbe.getBlockState2() == SPBlockEntity.State.BLUEPRINT)
+        {
+            LOGGER.info("ChopBehavior: skipping already blueprint {} ({}/{}) maid={}",
+                    target, currentIndex + 1, blocks.size(), maid.getId());
+            currentIndex++;
+            chopTimer = 0;
+            return;
+        }
+
         maid.getLookControl().setLookAt(
                 target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                 30f, 30f);
