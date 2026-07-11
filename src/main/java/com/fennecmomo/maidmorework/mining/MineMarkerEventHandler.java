@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.mining;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
+import com.fennecmomo.momolib.template.ConfirmMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -88,22 +89,22 @@ public class MineMarkerEventHandler
 
     private static void sendManageMessage(ServerPlayer sp, UUID id)
     {
-        net.minecraft.network.chat.Style style = net.minecraft.network.chat.Style.EMPTY
-                .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand(
-                        "/maidmorework mine delete " + id))
-                .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(
-                        Component.literal("删除此矿井")));
-        Component deleteBtn = Component.literal("§c[删除]").withStyle(style);
-
-        net.minecraft.network.chat.Style style2 = net.minecraft.network.chat.Style.EMPTY
-                .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand(
-                        "/maidmorework mine edit " + id))
-                .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(
-                        Component.literal("重新绑定到标记工具")));
-        Component editBtn = Component.literal("§e[编辑]").withStyle(style2);
-
-        sp.sendSystemMessage(Component.literal("§6=== 矿井管理 ===  ")
-                .append(deleteBtn).append("  ").append(editBtn));
+        sp.openMenu(
+                new net.minecraft.world.SimpleMenuProvider(
+                        (containerId, inv, player) ->
+                                new ConfirmMenu(containerId, inv,
+                                        "矿井管理", "",
+                                        "删除", "maidmorework mine delete " + id,
+                                        "编辑", "maidmorework mine edit " + id),
+                        Component.literal("矿井管理")),
+                buf -> {
+                    buf.writeUtf("矿井管理");
+                    buf.writeUtf("");
+                    buf.writeUtf("删除");
+                    buf.writeUtf("maidmorework mine delete " + id);
+                    buf.writeUtf("编辑");
+                    buf.writeUtf("maidmorework mine edit " + id);
+                });
     }
 
     private static void handleCornerClick(PlayerInteractEvent event, Player player,
@@ -178,38 +179,30 @@ public class MineMarkerEventHandler
         int sizeX = inst.maxX() - inst.minX() + 1;
         int sizeY = inst.maxY() - inst.minY() + 1;
         int sizeZ = inst.maxZ() - inst.minZ() + 1;
-        if (sizeX < 3 || sizeY < 3 || sizeZ < 3)
+        if (sizeX < 3 || sizeZ < 3)
         {
             player.sendSystemMessage(Component.literal(
-                    String.format("§c矿井范围过小(%dx%dx%d)，最小需要3x3x3", sizeX, sizeY, sizeZ)));
+                    String.format("§c矿井范围过小(%dx%d)，最小需要3x3", sizeX, sizeZ)));
             return;
         }
 
-        UUID id = inst.getId();
-        Component confirmBtn = Component.literal("§a[确认]").withStyle(s -> s
-                .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand(
-                        "/maidmorework mine confirm " + id + " " + blocked))
-                .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(
-                        Component.literal("确认创建矿井"))));
-
-        Component cancelBtn = Component.literal("§c[取消]").withStyle(s -> s
-                .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand(
-                        "/maidmorework mine cancel " + id))
-                .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(
-                        Component.literal("取消"))));
-
-        String info = String.format("§e中心: %s  范围: %dx%dx%d",
-                center.toShortString(),
-                inst.maxX() - inst.minX() + 1,
-                inst.maxY() - inst.minY() + 1,
-                inst.maxZ() - inst.minZ() + 1);
-
-        if (blocked)
-        {
-            info += " §c⚠中心有方块，确认将破坏";
-        }
-
-        player.sendSystemMessage(Component.literal(info).append("  ").append(confirmBtn).append("  ").append(cancelBtn));
+        String info = blocked ? "中心位置有方块冲突" : "";
+        player.openMenu(
+                new net.minecraft.world.SimpleMenuProvider(
+                        (containerId, inv, p) ->
+                                new ConfirmMenu(containerId, inv,
+                                        "确认创建矿井？", info,
+                                        "确认", "maidmorework mine confirm " + inst.getId() + " " + blocked,
+                                        "取消", "maidmorework mine cancel " + inst.getId()),
+                        Component.literal("确认创建矿井")),
+                buf -> {
+                    buf.writeUtf("确认创建矿井？");
+                    buf.writeUtf(info);
+                    buf.writeUtf("确认");
+                    buf.writeUtf("maidmorework mine confirm " + inst.getId() + " " + blocked);
+                    buf.writeUtf("取消");
+                    buf.writeUtf("maidmorework mine cancel " + inst.getId());
+                });
     }
 
     private static void confirmAndPlace(ServerPlayer player, MineInstance inst,

@@ -45,7 +45,6 @@ neoForge {
 
 dependencies {
     implementation files('../libs/touhoulittlemaid-2.0.0-neoforge+mc26.1.2-snapshot.jar')
-    // 依赖 MomoLib（加权行为框架）
     implementation files('../momolib/build/libs/momolib-0.0.1.jar')
 }
 
