@@ -1,5 +1,7 @@
 package com.fennecmomo.maidmorework;
 
+import com.fennecmomo.maidmorework.mining.MineCommand;
+import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.spblock.SPRegistration;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
@@ -23,8 +25,12 @@ public class MaidMoreWork
         ModAttachments.ATTACHMENT_TYPES.register(modBus);
         SPRegistration.BLOCKS.register(modBus);
         SPRegistration.BLOCK_ENTITIES.register(modBus);
+        MineRegistration.BLOCKS.register(modBus);
+        MineRegistration.BLOCK_ENTITIES.register(modBus);
+        MineRegistration.ITEMS.register(modBus);
 
         NeoForge.EVENT_BUS.addListener(this::onEntityJoinLevel);
+        NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
     }
 
     // 女仆加入世界时，从 Attachment 恢复 LOG_BLOCKS / LEAVES_BLOCKS 到 Memory
