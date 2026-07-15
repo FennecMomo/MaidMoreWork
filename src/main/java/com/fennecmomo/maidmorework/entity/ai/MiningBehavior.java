@@ -18,6 +18,7 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
@@ -34,38 +35,50 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
+// 挖矿行为：女仆加入矿井后，按螺旋规划逐层挖掘/填充/照明/替换
+// 状态流：准备（存矿→取垫脚→取火把）→ 领任务 → 导航 → 执行 → 循环
+// 四种任务类型：DIG(挖掘) / FILL(填充垫脚) / LIGHT(放火把) / REPLACE(替换边界方块)
+// 由 MiningTask 组装到 Brain，与 SearchBehavior 配合工作
+// SearchBehavior 找到矿井方块 → 写 Memory → 本行为启动
 public class MiningBehavior extends Behavior<EntityMaid>
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
-    private static final int MINE_INTERVAL = 10;
-    private static final double WALK_REACH_SQ = 16.0;
-    private static final double WALK_SPEED = 0.6;
-    private static final int MAX_NAV_FAIL = 3;
-    private static final int PREP_WAIT = 40;
-    private static final int BUBBLE_COOLDOWN = 120; // 气泡冷却时间（tick）
-    private static final long SCAFFOLD_KEY = 9530L;
-    private static final long TORCH_KEY = 9531L;
+    private static final int MINE_INTERVAL = 10;       // 挖一个方块的 tick 间隔
+    private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
+    private static final double WALK_SPEED = 0.6;        // 导航速度倍率
+    private static final int MAX_NAV_FAIL = 3;           // 导航失败次数上限，超过后强制到达
+    private static final int PREP_WAIT = 40;             // 准备阶段等待 tick（取不到物资时冷却）
+    private static final int BUBBLE_COOLDOWN = 120;      // 气泡冷却时间（tick），防止反复刷屏
+    private static final long SCAFFOLD_KEY = 9530L;      // 垫脚气泡冷却 key
+    private static final long TORCH_KEY = 9531L;         // 火把气泡冷却 key
 
-    private int mineTimer = 0;
-    private boolean reachedTarget = false;
-    private int navFailCount = 0;
-    private BlockPos mineBlockPos = null;
-    // 当前任务（挖或补），从矿井方块 requestNextTask() 获取
+    private int mineTimer = 0;                  // 当前方块的挖掘计时
+    private boolean reachedTarget = false;       // 是否已到达目标方块附近
+    private int navFailCount = 0;                // 连续导航失败次数
+    private BlockPos mineBlockPos = null;        // 矿井方块位置（女仆在这里存取物资）
+    // 当前任务（挖或补或照明或替换），从矿井方块 requestNextTask() 获取
     private DigTask currentTask = null;
 
-    // 准备工作就绪标志（垫脚+火把+...），false时走checkPreparation
+    // 准备工作就绪标志，false 时走 checkPreparation 流程
+    // 准备流程：背包满→存矿 → 缺垫脚→取 → 缺火把→取 → 全部就绪
     private boolean preparationReady = false;
-    private int preparationWaitTicks = 0;
+    private int preparationWaitTicks = 0;  // 取不到物资时的冷却倒计时
 
-    // Home 距离诊断日志用
+    // Home 距离诊断日志计数器（每 100 tick 打印一次）
     private int homeLogTick = 0;
 
+    // 构造：无内存需求，永不超时（由外部 stop() 终止，或由 canStillUse 返回 false 结束）
     public MiningBehavior()
     {
         super(Map.of(), Integer.MAX_VALUE);
     }
 
+    // ===================== 启动/继续条件 =====================
+
+    // 启动条件：Home 模式下 + Memory 中有矿井方块列表（或可从 Attachment 恢复）
+    // 跟随模式下不启动挖矿，避免女仆跟着主人时还去挖矿
+    // Attachment 恢复：世界重进后 Memory 被清空，但 Attachment 仍保存着矿井位置
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
@@ -94,6 +107,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return blocks.isPresent() && !blocks.get().isEmpty();
     }
 
+    // 持续条件：Home 模式下 + 方块列表非空
+    // 跟随模式切换时立即停止挖矿
     @Override
     protected boolean canStillUse(ServerLevel level, EntityMaid maid, long time)
     {
@@ -106,6 +121,10 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return blocks.isPresent() && !blocks.get().isEmpty();
     }
 
+    // ===================== 生命周期 =====================
+
+    // 行为启动：装备镐子、加入矿井、初始化状态
+    // 加入矿井时女仆 Home 会被设到矿井方块位置，限制搜索范围
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
@@ -143,6 +162,12 @@ public class MiningBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 每 tick 驱动：准备阶段 → 领任务 → 导航/挖掘/填充/照明/替换
+    // 整体流程：
+    // 1. preparationReady=false 时走 checkPreparation 存取物资
+    // 2. currentTask=null 时向矿井方块请求下一个任务
+    // 3. 导航到目标方块附近
+    // 4. 根据任务类型执行具体操作
     @Override
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
@@ -159,18 +184,20 @@ public class MiningBehavior extends Behavior<EntityMaid>
                     dist, maid.isHomeModeEnable());
         }
 
-        // 准备阶段：顺序检查垫脚→火把，不过就等待
+        // 准备阶段未完成：顺序检查存矿/取垫脚/取火把，缺什么就导航到矿井方块处理
         if (!preparationReady)
         {
             checkPreparation(level, maid);
             return;
         }
 
+        // 没有当前任务：向矿井方块请求下一个挖掘/填充/照明/替换任务
         if (currentTask == null)
         {
             requestNextTask(level, maid);
             if (currentTask == null)
             {
+                // 矿井已无任务可干，结束挖矿行为
                 LOGGER.info("MiningBehavior: no more tasks, finishing maid={}", maid.getId());
                 finishMining(level, maid);
                 return;
@@ -189,7 +216,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // 任务可能已被外部改变，重新校验有效性
+        // 校验目标方块状态：可能已被其他女仆挖了或填充了
+        // DIG 目标变成空气 = 已完成，FILL 目标变成固体 = 已完成
         BlockState state = level.getBlockState(targetPos);
         if (currentTask.type() == DigTask.Type.DIG && state.isAir())
         {
@@ -210,6 +238,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
             return;
         }
 
+        // 尚未到达目标：导航到目标方块附近（4格内）
         if (!reachedTarget)
         {
             double distSq = maid.distanceToSqr(
@@ -255,10 +284,12 @@ public class MiningBehavior extends Behavior<EntityMaid>
             return;
         }
 
+        // 已到达目标：执行具体任务操作
         maid.getLookControl().setLookAt(
                 targetPos.getX() + 0.5, targetPos.getY() + 0.5, targetPos.getZ() + 0.5,
                 30f, 30f);
 
+        // === DIG 任务：挥镐挖矿，掉落物直接进背包 ===
         if (currentTask.type() == DigTask.Type.DIG)
         {
             mineTimer++;
@@ -302,6 +333,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 }
             }
         }
+        // === FILL 任务：放置垫脚方块，背包里没有则提示并释放任务 ===
         else if (currentTask.type() == DigTask.Type.FILL)
         {
             if (tryPlaceScaffold(level, maid, targetPos))
@@ -324,6 +356,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 reachedTarget = false;
             }
         }
+        // === LIGHT 任务：先挖掉目标位置的方块，然后放火把 ===
         else if (currentTask.type() == DigTask.Type.LIGHT)
         {
             BlockState lightState = level.getBlockState(targetPos);
@@ -358,6 +391,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 }
             }
         }
+        // === REPLACE 任务：挖掉非垫脚方块，然后放垫脚方块替换 ===
         else if (currentTask.type() == DigTask.Type.REPLACE)
         {
             BlockState replaceState = level.getBlockState(targetPos);
@@ -394,6 +428,10 @@ public class MiningBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // ===================== 准备阶段 =====================
+
+    // 顺序检查：背包满→存矿、缺垫脚→取、缺火把→取，全部就绪才设 preparationReady
+    // 每次只处理一步，避免一次 tick 内做太多事
     private void checkPreparation(ServerLevel level, EntityMaid maid)
     {
         if (preparationWaitTicks > 0)
@@ -446,6 +484,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 气泡冷却追踪（key → 上次添加时的 gameTick）
+    // 用于防止同一种提示反复刷屏，比如“需要垫脚方块”
     private final Map<Long, Long> bubbleLastTick = new HashMap<>();
 
     // 带冷却的气泡显示，防止累积
@@ -461,10 +500,11 @@ public class MiningBehavior extends Behavior<EntityMaid>
         bubbleLastTick.put(key, currentTick);
     }
 
-    // 通用物资请求：检查→导航→取物→提示
+    // 通用物资请求：检查是否在矿井附近 → 从容器取物 → 取不到则显示气泡提示
     // predicate: 判断物品是否匹配（如 isScaffoldItem、isTorchItem）
-    // bubbleKey: 气泡冷却 key（避免重复添加）
-    // bubbleText: 气泡提示文本
+    // bubbleKey: 气泡冷却 key（避免重复添加同类提示）
+    // bubbleText: 气泡提示文本（如“需要垫脚方块”）
+    // 返回 true 表示成功取到物资
     private boolean requestItemFromMineBlock(
             ServerLevel level, EntityMaid maid,
             java.util.function.Predicate<ItemStack> predicate,
@@ -489,6 +529,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 检查女仆背包是否已满（所有可用格子非空）
+    // 满了就要回矿井方块存矿，腾出空间继续挖
     private boolean isInventoryFull(EntityMaid maid)
     {
         CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
@@ -502,7 +543,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return emptyCount == 0;
     }
 
-    // 检查女仆是否在矿井方块附近
+    // 检查女仆是否在矿井方块附近（4格内）
+    // 用于判断是否可以存取物资
     private boolean isNearMineBlock(EntityMaid maid)
     {
         if (mineBlockPos == null) return false;
@@ -511,6 +553,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 把物品插入女仆背包，返回塞不下的部分
+    // 优先堆叠到已有同类堆，再放入空格
+    // 用于挖矿掉落物直接进背包（不产生掉落物实体）
     private ItemStack addToInventory(EntityMaid maid, ItemStack stack)
     {
         if (stack.isEmpty()) return ItemStack.EMPTY;
@@ -543,7 +587,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return remaining > 0 ? new ItemStack(res.getItem(), remaining) : ItemStack.EMPTY;
     }
 
-    // 把女仆背包里的东西存入矿井方块容器
+    // 把女仆背包里的东西存入矿井方块容器（每格最大 640 堆叠）
+    // 遍历背包所有槽位，逐个存入
     private void depositToMineBlock(ServerLevel level, EntityMaid maid)
     {
         if (mineBlockPos == null || !(level.getBlockEntity(mineBlockPos) instanceof MineBlockEntity be)) return;
@@ -572,6 +617,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 尝试从矿井方块容器中取出一个匹配的物品给女仆
+    // 遍历容器找到匹配 predicate 的物品，取一个放入背包
+    // 背包满了则放回容器，返回 false
     private boolean tryRetrieveFromMineBlock(ServerLevel level, EntityMaid maid,
                                               java.util.function.Predicate<ItemStack> predicate)
     {
@@ -609,6 +656,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return false;
     }
 
+    // 导航到矿井方块附近（存取物资前调用）
     private void goToMineBlock(ServerLevel level, EntityMaid maid)
     {
         if (mineBlockPos != null && !maid.getNavigation().isInProgress())
@@ -623,7 +671,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 从矿井方块申请下一个任务（挖或补）
+    // 从矿井方块申请下一个任务（挖/补/照明/替换）
+    // 调用 MineBlockEntity.requestNextTask()，返回 null 表示矿井已无活可干
     private void requestNextTask(ServerLevel level, EntityMaid maid)
     {
         if (mineBlockPos == null || !(level.getBlockEntity(mineBlockPos) instanceof MineBlockEntity be) || !be.hasInstance())
@@ -640,6 +689,10 @@ public class MiningBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // ===================== 物品检查 =====================
+
+    // 检查女仆背包/手中是否有垫脚方块（泥土/木板/圆石/石头）
+    // 用于准备阶段和 FILL 任务前的库存检查
     private boolean hasScaffoldBlock(EntityMaid maid)
     {
         if (isScaffoldItem(maid.getMainHandItem())) return true;
@@ -654,6 +707,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return false;
     }
 
+    // 判断物品是否为垫脚方块（泥土/木板/圆石/石头）
+    // 用于 FILL/REPLACE 任务时从背包取方块放置
     private boolean isScaffoldItem(ItemStack stack)
     {
         if (!(stack.getItem() instanceof BlockItem bi)) return false;
@@ -665,6 +720,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return false;
     }
 
+    // 检查女仆背包/手中是否有火把或灯笼
+    // 用于准备阶段和 LIGHT 任务前的库存检查
     private boolean hasTorchBlock(EntityMaid maid)
     {
         if (isTorchItem(maid.getMainHandItem())) return true;
@@ -679,6 +736,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return false;
     }
 
+    // 判断物品是否为火把或灯笼
     private boolean isTorchItem(ItemStack stack)
     {
         return stack.getItem() == Items.TORCH
@@ -686,6 +744,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 在目标位置放置一块垫脚方块，成功返回 true
+    // 从背包找第一个垫脚方块放置，用 Transaction 扣减库存
+    // 允许在空气或可替换方块（流体、草丛等）中放置
     private boolean tryPlaceScaffold(ServerLevel level, EntityMaid maid, BlockPos target)
     {
         BlockState targetState = level.getBlockState(target);
@@ -715,6 +775,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 在目标位置放置火把，成功返回 true
+    // 从背包找第一个火把/灯笼放置，用 Transaction 扣减库存
     private boolean tryPlaceTorch(ServerLevel level, EntityMaid maid, BlockPos target)
     {
         if (!level.getBlockState(target).isAir()) return false;
@@ -741,7 +802,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 挖掉方块并将掉落物直接收入背包（用于 LIGHT/REPLACE 任务）
+    // 挖掉方块并将掉落物直接收入背包（用于 LIGHT/REPLACE 任务的预处理步骤）
+    // 先计算掉落物，再 destroyBlock(false)不自动掉落，手动插入背包
     private void mineAndCollect(ServerLevel level, EntityMaid maid, BlockPos pos)
     {
         BlockState blockState = level.getBlockState(pos);
@@ -761,12 +823,19 @@ public class MiningBehavior extends Behavior<EntityMaid>
         LOGGER.info("MiningBehavior: mineAndCollect {} maid={}", pos, maid.getId());
     }
 
+    // 挖矿完成（无任务可干）：清空状态并结束
     private void finishMining(ServerLevel level, EntityMaid maid)
     {
         LOGGER.info("MiningBehavior: mining finished maid={}", maid.getId());
         clearAll(maid);
     }
 
+    // ===================== 行为停止 =====================
+
+    // 行为停止：被打断时完成当前任务、离开矿井、清空状态
+    // 如果当前有 DIG 任务，强制完成挖掘并收集掉落物
+    // 如果当前有 FILL 任务，尝试放置垫脚方块，失败则释放目标
+    // 最后离开矿井、恢复 Home、清空所有局部状态
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
@@ -823,6 +892,11 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 破坏方块后检查下方是否安全，不安全则生成对应任务
+    // 安全检查规则：
+    // 1. 下方是实心方块 → 安全，无需处理
+    // 2. 下方是流体（水/岩浆）→ 消除流体，给女仆一个流体瓶
+    // 3. 下方是不可破坏方块（基岩）→ 停机，整个矿井关闭
+    // 4. 其他情况（空气）→ 填充垫脚方块，女仆没有则创建 FILL 任务
     private void checkBelowSafety(ServerLevel level, EntityMaid maid, BlockPos brokenPos)
     {
         BlockPos below = brokenPos.below();
@@ -845,7 +919,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
                         .getResourceKey(fluid).orElse(null);
             }
 
-            level.setBlock(below, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
+            level.setBlock(below, Blocks.AIR.defaultBlockState(), 3);
 
             if (fluidKey != null)
             {
@@ -918,16 +992,16 @@ public class MiningBehavior extends Behavior<EntityMaid>
     private boolean isFluidSource(BlockState state)
     {
         Block block = state.getBlock();
-        return block == net.minecraft.world.level.block.Blocks.WATER
-                || block == net.minecraft.world.level.block.Blocks.LAVA;
+        return block == Blocks.WATER
+                || block == Blocks.LAVA;
     }
 
     // 从方块状态获取对应的流体类型
     private Fluid getFluidFromBlock(BlockState state)
     {
         Block block = state.getBlock();
-        if (block == net.minecraft.world.level.block.Blocks.WATER) return Fluids.WATER;
-        if (block == net.minecraft.world.level.block.Blocks.LAVA) return Fluids.LAVA;
+        if (block == Blocks.WATER) return Fluids.WATER;
+        if (block == Blocks.LAVA) return Fluids.LAVA;
         return null;
     }
 
@@ -951,6 +1025,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
         currentTask = null;
     }
 
+    // 清空所有状态和 Memory
     private void clearAll(EntityMaid maid)
     {
         maid.getBrain().eraseMemory(ModMemories.LOG_BLOCKS.get());
@@ -964,6 +1039,8 @@ public class MiningBehavior extends Behavior<EntityMaid>
         preparationWaitTicks = 0;
     }
 
+    // 装备镐子：从背包找镐子换到主手，已有镐子则跳过
+    // 用 Transaction 保证背包操作的原子性（取出镐子+放入旧物品）
     private void equipPickaxe(EntityMaid maid)
     {
         if (maid.getMainHandItem().is(ItemTags.PICKAXES)) return;
@@ -989,6 +1066,9 @@ public class MiningBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 在目标方块附近找可站立的行走点
+    // 优先找同高度的相邻站立点（空气+脚下实心）
+    // 找不到时找相邻方块的上方（站在上一层空间往下挖）
     private BlockPos findWalkTarget(ServerLevel level, BlockPos target)
     {
         // 先找同高度的相邻站立点

@@ -3,15 +3,18 @@ package com.fennecmomo.maidmorework.mining;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.Container;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.neoforged.neoforge.common.Tags;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -25,20 +28,22 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-// 矿井实体方块的BlockEntity
-// 存储矿井完整数据（ID+主人+矿区尺寸+女仆列表），世界重进后自动恢复实例到内存
+// 矿井实体方块的 BlockEntity（矿井核心数据对象）
+// 存储矿井完整数据：ID + 主人 + 矿区尺寸 + 女仆列表 + 储物 + 挖掘进度
+// 世界重进后自动恢复实例到内存（onLoad）
 // 同时实现 Container 提供 27 格储物空间（每格最大 640 堆叠）
+// 任务分配流程：requestNextTask → 按 Y 层从高到低分配 → 同层内就近分配
 public class MineBlockEntity extends BlockEntity implements Container
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-    private long idMost = 0L;
-    private long idLeast = 0L;
-    private long ownerMost = 0L;
-    private long ownerLeast = 0L;
-    // 矿区尺寸
+    private long idMost = 0L;      // 矿井实例 ID 高位
+    private long idLeast = 0L;     // 矿井实例 ID 低位
+    private long ownerMost = 0L;   // 矿井主人 UUID 高位
+    private long ownerLeast = 0L;  // 矿井主人 UUID 低位
+    // 矿区尺寸（L=东西方向长度，W=南北方向宽度）
     private int mineL = 0;
     private int mineW = 0;
-    // 在此矿井工作的女仆UUID列表
+    // 在此矿井工作的女仆 UUID 列表（分拆为 Most/Least 方便序列化）
     private final List<Long> maidIdMosts = new ArrayList<>();
     private final List<Long> maidIdLeasts = new ArrayList<>();
 
@@ -46,16 +51,17 @@ public class MineBlockEntity extends BlockEntity implements Container
     private SpiralMinePlanner planner = null;
 
     // 当前周期进度（用于女仆挖矿任务流）
+    // 周期 = 螺旋规划器的一轮完整下挖，包含多个 Y 层
     private int currentCycle = 0;
-    // 当前正在处理的 Y 层索引（在 sortedY 里，0=最高层）
+    // 当前正在处理的 Y 层索引（在 sortedY 里，0=最高层，从高往下挖）
     private int currentLayerIndex = 0;
     // 当前周期内所有 Y 层，从高到低排序
     private final List<Integer> sortedY = new ArrayList<>();
-    // 当前周期内按 Y 层组织的保留区
+    // 当前周期内按 Y 层组织的保留区（螺旋楼梯支撑结构，不能被挖）
     private final Map<Integer, Set<BlockPos>> currentCycleKeeps = new HashMap<>();
-    // 当前周期内按 Y 层组织的光源位置
+    // 当前周期内按 Y 层组织的光源位置（火把放置点）
     private final Map<Integer, Set<BlockPos>> currentCycleLights = new HashMap<>();
-    // 当前周期内按 Y 层组织的替换位置
+    // 当前周期内按 Y 层组织的替换位置（边界方块替换为垫脚方块）
     private final Map<Integer, Set<BlockPos>> currentCycleReplaces = new HashMap<>();
     // 已分配给女仆但尚未完成的目标，防止多女仆抢同一方块
     private final Set<BlockPos> assignedTargets = new HashSet<>();
@@ -75,6 +81,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         super(MineRegistration.MINE_BLOCK_ENTITY.get(), pos, state);
     }
 
+    // 初始化矿井实例数据：从两个角点计算矿区尺寸，创建螺旋规划器
     public void setInstanceData(UUID id, UUID owner, BlockPos c1, BlockPos c2)
     {
         this.idMost = id.getMostSignificantBits();
@@ -96,22 +103,26 @@ public class MineBlockEntity extends BlockEntity implements Container
                 getBlockPos().toShortString(), mineL, mineW, getBlockPos().getY() - 1);
     }
 
+    // 获取矿井实例 ID
     public UUID getInstanceId()
     {
         return new UUID(idMost, idLeast);
     }
 
+    // 获取矿井主人 UUID
     public UUID getOwner()
     {
         return new UUID(ownerMost, ownerLeast);
     }
 
+    // 是否已绑定矿井实例
     public boolean hasInstance()
     {
         return idMost != 0L || idLeast != 0L;
     }
 
-    // 女仆加入矿井
+    // 女仆加入矿井：记录 UUID + 保存原 Home + 设 Home 到矿井方块位置
+    // 重复加入会被忽略，已加入的女仆再次加入时直接返回
     public void joinMine(EntityMaid maid)
     {
         UUID uuid = maid.getUUID();
@@ -135,7 +146,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         setChanged();
     }
 
-    // 女仆离开矿井
+    // 女仆离开矿井：从列表移除 UUID + 恢复原 Home
     public void leaveMine(EntityMaid maid)
     {
         UUID uuid = maid.getUUID();
@@ -159,6 +170,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         }
     }
 
+    // 检查女仆是否已加入本矿井
     public boolean isMaidInMine(EntityMaid maid)
     {
         UUID uuid = maid.getUUID();
@@ -173,11 +185,13 @@ public class MineBlockEntity extends BlockEntity implements Container
         return false;
     }
 
+    // 获取规划器长度
     public int getPlannerL()
     {
         return mineL;
     }
 
+    // 获取规划器宽度
     public int getPlannerW()
     {
         return mineW;
@@ -215,16 +229,20 @@ public class MineBlockEntity extends BlockEntity implements Container
         return null;
     }
 
+    // ===================== 任务分配 =====================
+
     // 女仆请求下一个任务：返回挖/补/空，空表示当前矿井已无活可干
     public DigTask requestNextTask(EntityMaid maid)
     {
         return requestNextTask(maid.blockPosition());
     }
 
-    // 女仆请求下一个任务：同层内就近分配，一层完成才推进下一层
+    // 女仆请求下一个任务：按 Y 层从高到低，同层内就近分配
+    // 当前层所有方块都处理完后才推进到下一层
+    // 多女仆同时工作时通过 assignedTargets 防止重复分配
     public DigTask requestNextTask(BlockPos maidPos)
     {
-        // 已停机的矿井不再分配任务
+        // 已停机的矿井不再分配任务（遇到基岩等不可破坏方块时停机）
         if (shutdown) return null;
         if (planner == null || level == null) return null;
 
@@ -296,6 +314,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         return null;
     }
 
+    // 确保当前周期数据已加载（懒加载）
     private void ensureCycleLoaded()
     {
         if (sortedY.isEmpty())
@@ -304,6 +323,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         }
     }
 
+    // 推进到下一个周期（清空所有进度状态）
     private void advanceCycle()
     {
         currentCycle++;
@@ -392,6 +412,10 @@ public class MineBlockEntity extends BlockEntity implements Container
         setChanged();
     }
 
+    // 计算一个完整周期的任务数据：保留区、光源、替换位置
+    // 遍历螺旋规划器的所有 (n, idx) 组合，收集保留方块并按 Y 层分组
+    // 同时生成边界围墙、光源位置、替换位置
+    // sortedY 从高到低排序，矿井从最上层开始挖
     private void computeCycle(int C)
     {
         sortedY.clear();
@@ -522,6 +546,7 @@ public class MineBlockEntity extends BlockEntity implements Container
     }
 
     // 在矿区边界向外加一圈保留方块，形成围墙
+    // 只对 mineY 以下的 Y 层加围墙，入口区域保持开放
     private void addBoundaryKeeps(Set<BlockPos> keeps, int y)
     {
         int minX = planner.getMinX() - 1;
@@ -539,15 +564,18 @@ public class MineBlockEntity extends BlockEntity implements Container
     }
 
     // 判断方块状态是否为垫脚方块类型（泥土/木板/圆石/石头）
+    // 用于识别女仆放置的临时方块
     private boolean isScaffoldState(BlockState state)
     {
-        net.minecraft.world.level.block.Block block = state.getBlock();
-        if (block.builtInRegistryHolder().is(net.minecraft.tags.BlockTags.DIRT)) return true;
-        if (block.builtInRegistryHolder().is(net.minecraft.tags.BlockTags.PLANKS)) return true;
-        if (block.builtInRegistryHolder().is(net.neoforged.neoforge.common.Tags.Blocks.COBBLESTONES)) return true;
-        if (block.builtInRegistryHolder().is(net.neoforged.neoforge.common.Tags.Blocks.STONES)) return true;
+        Block block = state.getBlock();
+        if (block.builtInRegistryHolder().is(BlockTags.DIRT)) return true;
+        if (block.builtInRegistryHolder().is(BlockTags.PLANKS)) return true;
+        if (block.builtInRegistryHolder().is(Tags.Blocks.COBBLESTONES)) return true;
+        if (block.builtInRegistryHolder().is(Tags.Blocks.STONES)) return true;
         return false;
     }
+
+    // ===================== 停机 =====================
 
     // 停机：遇到不可破坏方块时调用，停止分配任务并召回所有女仆
     public void shutdownMine(ServerLevel serverLevel)
@@ -580,7 +608,10 @@ public class MineBlockEntity extends BlockEntity implements Container
         setChanged();
     }
 
+    // 是否已停机
     public boolean isShutdown() { return shutdown; }
+
+    // ===================== 调试方法 =====================
 
     // 获取一个完整周期的所有待挖方块（C=0，n=0~3，idx递增）
     public List<BlockPos> getAllDigBlocksForCycle()
@@ -684,6 +715,9 @@ public class MineBlockEntity extends BlockEntity implements Container
         return result;
     }
 
+    // ===================== 生命周期 =====================
+
+    // 方块加载时恢复实例到内存管理器并重新计算周期
     @Override
     public void onLoad()
     {
@@ -801,6 +835,9 @@ public class MineBlockEntity extends BlockEntity implements Container
         super.setChanged();
     }
 
+    // ===================== 序列化 =====================
+
+    // 保存到 NBT：ID、主人、尺寸、周期进度、女仆列表、储物
     @Override
     protected void saveAdditional(ValueOutput output)
     {
@@ -823,6 +860,7 @@ public class MineBlockEntity extends BlockEntity implements Container
         ContainerHelper.saveAllItems(output, items);
     }
 
+    // 从 NBT 加载：恢复所有持久化字段
     @Override
     protected void loadAdditional(ValueInput input)
     {

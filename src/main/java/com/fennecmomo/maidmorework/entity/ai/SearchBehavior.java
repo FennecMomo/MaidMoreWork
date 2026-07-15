@@ -11,20 +11,24 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
-// 通用螺旋搜索行为
+// 通用螺旋搜索行为（伐木/挖矿共用）
 // 从女仆当前位置出发，按切比雪夫距离逐层向外螺旋遍历坐标点
 // 每点调用一次 scanAction，找到后写 Memory 并返回 true
 // useHomeRestriction=true 时搜索范围限定在家园范围内（Y±16），耗尽后静默等待
+// useHomeRestriction=false 时搜索耗尽后随机游荡到远处换地方搜
 // 零实例业务状态，所有协调通过 Memory 完成
+// 在 IMaidTask.createBrainTasks() 中与具体业务行为一起注册到 Brain
 public class SearchBehavior extends Behavior<EntityMaid>
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
+    // 随机游荡距离范围（螺旋耗尽后选一个远处点导航过去再搜）
     private static final double MIN_DIST = 20;
     private static final double MAX_DIST = 35;
     // 速度倍率，TLM 的 MaidMoveControl 会乘以 MOVEMENT_SPEED 属性再 *3
     // 0.3 是 TLM 随机闲逛的倍率
     private static final double WALK_SPEED = 0.3;
     // 气泡框冷却 key，防止反复刷屏
+    // 9527: 跟随模式提示，9528: 家园范围无资源提示
     private static final long FOLLOW_WARN_KEY = 9527L;
     private static final long NO_RESOURCE_KEY = 9528L;
     // 每 tick 处理的螺旋点数
@@ -34,18 +38,19 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 家园模式 Y 轴扩展范围
     private static final int HOME_Y_RANGE = 16;
 
-    private final ISearchAction scanAction;
-    private final MemoryModuleType<?> targetMemory;
-    private final int scanHalfXZ;
-    private final int scanYDown;
-    private final int scanYUp;
-    private final boolean useHomeRestriction;
+    private final ISearchAction scanAction;       // 单点检索回调，外部传入
+    private final MemoryModuleType<?> targetMemory; // 目标 Memory，为空时搜索，有值时结束
+    private final int scanHalfXZ;                  // 非家园模式 XZ 半径
+    private final int scanYDown;                   // 非家园模式 Y 向下范围
+    private final int scanYUp;                     // 非家园模式 Y 向上范围
+    private final boolean useHomeRestriction;      // 是否受家园范围限制
 
-    // 螺旋状态
+    // 螺旋状态：原点、待访问队列、已访问集合
+    // 每次 start() 或螺旋耗尽时重置
     private BlockPos spiralOrigin = null;
     private Deque<BlockPos> spiralQueue = null;
     private Set<BlockPos> spiralVisited = null;
-    // 家园限制下的静默倒计时
+    // 家园限制下的静默倒计时（螺旋耗尽后等待一段时间再试）
     private int silenceTicks = 0;
 
     // scanAction: 单点检索方法，找到目标后写 Memory 并返回 true
@@ -98,6 +103,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         return maid.getBrain().getMemory(targetMemory).isEmpty();
     }
 
+    // 行为启动：重置静默计时、以女仆当前位置初始化螺旋原点
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
@@ -106,6 +112,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         resetSpiral(maid.blockPosition());
     }
 
+    // 每 tick 驱动：检查静默 → 等待导航完成 → 批量处理螺旋点 → 耗尽时游荡或静默
     @Override
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
@@ -164,6 +171,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 行为停止：清空螺旋状态和导航，确保下次 start 时重新初始化
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
@@ -175,7 +183,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
         silenceTicks = 0;
     }
 
-    // 以原点初始化螺旋队列
+    // 以原点初始化螺旋队列，清空已访问集合
+    // 螺旋遍历从原点开始向 26 个方向逐步扩展
     private void resetSpiral(BlockPos origin)
     {
         spiralOrigin = origin;
@@ -185,8 +194,10 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralVisited.add(origin);
     }
 
-    // 从当前点向 26 方向扩展螺旋
-    // 家园限制模式下检查 isWithinRestriction + Y±16；否则用固定 scanHalfXZ/scanYDown/scanYUp
+    // 从当前点向 26 方向扩展螺旋（3x3x3 立方体的所有偏移）
+    // 家园限制模式下检查 isWithinHome + Y±16
+    // 非家园模式下用固定 scanHalfXZ/scanYDown/scanYUp 作为边界
+    // 用 visited 集合防止重复访问
     private void expandSpiral(BlockPos point, EntityMaid maid)
     {
         boolean restricted = useHomeRestriction && maid.hasHome();
@@ -229,7 +240,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 选随机方向导航（非家园限制模式用）
+    // 选随机方向导航到 20~35 格外的某个点（非家园限制模式用）
+    // 螺旋耗尽后女仆走到新位置再重新初始化螺旋，覆盖更多区域
     private void pickRandomAndMove(EntityMaid maid)
     {
         BlockPos here = maid.blockPosition();

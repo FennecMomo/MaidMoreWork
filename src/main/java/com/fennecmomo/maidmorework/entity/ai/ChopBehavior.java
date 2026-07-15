@@ -20,24 +20,38 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
-// 伐木砍伐行为
+// 伐木砍伐行为：导航到树脚 → 替换为 SPBlock → 逐个标记蓝图 → 收集掉落物
+// 由 LoggingTask 组装到 Brain，与 SearchBehavior 配合工作
+// SearchBehavior 找到树 → BFS 整棵树 → 聚类 → 写 Memory → 本行为启动
+// 整体流程：
+// 1. 导航到树脚附近（2格内）
+// 2. 到达后把所有原木和树叶替换为 SPBlock（不可破坏的代理方块）
+// 3. 逐个标记为蓝图状态（每 10 tick 标记一个）
+// 4. 全部标记后调用 finishTree：收集所有方块掉落物 + 清空 Memory
+// 5. 如果被打断，stop() 会把剩余 SPBlock 还原回原始方块
 public class ChopBehavior extends Behavior<EntityMaid>
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
-    private static final int CHOP_INTERVAL = 10;
-    private static final double WALK_REACH_SQ = 4.0;
-    private static final double WALK_SPEED = 0.6;
+    private static final int CHOP_INTERVAL = 10;   // 标记一个方块为蓝图的 tick 间隔
+    private static final double WALK_REACH_SQ = 4.0; // 到达树脚的判定距离平方（2格）
+    private static final double WALK_SPEED = 0.6;    // 导航速度倍率
 
-    private int currentIndex = 0;
-    private int chopTimer = 0;
-    private boolean reachedTree = false;
+    private int currentIndex = 0;     // 当前正在标记的原木索引
+    private int chopTimer = 0;       // 当前方块的砍伐计时
+    private boolean reachedTree = false; // 是否已到达树脚附近
 
+    // 构造：无内存需求，永不超时
     public ChopBehavior()
     {
         super(Map.of(), Integer.MAX_VALUE);
     }
 
+    // ===================== 启动/继续条件 =====================
+
+    // 启动条件：Memory 中有原木列表（或可从 Attachment 恢复）
+    // Memory 为空时尝试从 Attachment 恢复持久化数据（世界重进后 Memory 被清空）
+    // 恢复时同步恢复树叶列表和工作关键词
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
@@ -69,6 +83,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
         return hasBlocks;
     }
 
+    // 持续条件：原木列表非空（还没砍完）
+    // 砍完时 finishTree 会清空 Memory，canStillUse 自然返回 false
     @Override
     protected boolean canStillUse(ServerLevel level, EntityMaid maid, long time)
     {
@@ -81,6 +97,10 @@ public class ChopBehavior extends Behavior<EntityMaid>
         return stillUse;
     }
 
+    // ===================== 生命周期 =====================
+
+    // 行为启动：装备斧子、验证树脚方块有效性
+    // 如果是从 Attachment 恢复的，树脚可能已被替换为 SPBlock，这也算有效
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
@@ -108,6 +128,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 每 tick 驱动：导航到树脚 → 替换 SPBlock → 逐个标记蓝图
+    // 流程：
+    // 1. 未到达树脚：导航到树脚附近，到达后替换所有原木+树叶为 SPBlock
+    // 2. 已到达树脚：逐个标记原木为蓝图（每 CHOP_INTERVAL 标记一个）
+    // 3. 全部标记完后调用 finishTree 收集掉落物
     @Override
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
@@ -229,6 +254,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // ===================== 完成与停止 =====================
+
+    // 砍伐完成：标记树叶蓝图 → 收集所有方块掉落物 → 清空 Memory + Attachment
+    // 先标记树叶为蓝图，再逐个收集原木和树叶的掉落物
+    // 最后清空所有伐木相关 Memory 和 Attachment
     private void finishTree(ServerLevel level, EntityMaid maid)
     {
         Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
@@ -264,6 +294,9 @@ public class ChopBehavior extends Behavior<EntityMaid>
         LOGGER.info("ChopBehavior: tree finished, all blocks collected maid={}", maid.getId());
     }
 
+    // 行为停止（被打断）：还原剩余 SPBlock → 清空 Memory + Attachment
+    // 只还原还未被标记蓝图的方块（currentIndex 之后的原木 + 所有树叶）
+    // SPBlock 还原回原始方块后清除 Attachment（不需要再次恢复了）
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
@@ -301,6 +334,10 @@ public class ChopBehavior extends Behavior<EntityMaid>
         reachedTree = false;
     }
 
+    // ===================== 辅助方法 =====================
+
+    // 装备斧子：从背包找斧子换到主手，已有斧子则跳过
+    // 用 Transaction 保证背包操作的原子性
     private void equipAxe(EntityMaid maid)
     {
         if (maid.getMainHandItem().getItem() instanceof AxeItem) return;
@@ -326,6 +363,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 找到树脚（原木列表中 Y 最低的方块）
     private BlockPos findTreeBase(List<BlockPos> blocks)
     {
         BlockPos base = blocks.get(0);
@@ -339,7 +377,9 @@ public class ChopBehavior extends Behavior<EntityMaid>
         return base;
     }
 
-    // 在树脚周围5格范围内找离树脚最近的可站立位置（空气+脚下实心）
+    // 在树脚周围 5 格范围内找离树脚最近的可站立位置
+    // 用 BFS 螺旋搜索，找到空气 + 脚下实心的位置
+    // 返回最接近树脚的站立点，找不到则返回树脚下方
     private BlockPos findWalkTarget(ServerLevel level, BlockPos treeBase)
     {
         BlockPos best = null;
@@ -381,6 +421,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
         return best != null ? best : treeBase.below();
     }
 
+    // 清空所有伐木相关 Memory（关键词不清，切任务前一直保留）
+    // WORK_ACTION 和 WORK_TARGET 故意不清除，用于气泡框提示文案
     private void clearAllMemory(EntityMaid maid)
     {
         maid.getBrain().eraseMemory(ModMemories.LOG_BLOCKS.get());

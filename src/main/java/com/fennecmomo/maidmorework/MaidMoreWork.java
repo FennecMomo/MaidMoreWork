@@ -19,13 +19,17 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.List;
 
-// maidmorework 模组主类
-// 负责注册自定义 MemoryModuleType、AttachmentType 和 SPBlock 方块
+// maidmorework 模组主类（@Mod 入口）
+// 负责：
+// 1. 注册所有 DeferredRegister（Memory、Attachment、SPBlock、MineBlock、菜单、数据组件、创造模式标签）
+// 2. 监听女仆加入世界事件，从 Attachment 恢复伐木/挖矿进度到 Memory
+// 3. 注册命令和事件监听
 @Mod(MaidMoreWork.MODID)
 public class MaidMoreWork
 {
     public static final String MODID = "maidmorework";
 
+    // 创造模式标签页注册
     public static final DeferredRegister<CreativeModeTab> CREATIVE_TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
@@ -33,6 +37,7 @@ public class MaidMoreWork
             ResourceKey.create(Registries.CREATIVE_MODE_TAB,
                     net.minecraft.resources.Identifier.fromNamespaceAndPath(MODID, "tab"));
 
+    // 静态初始化块：注册创造模式标签页，添加矿井方块/标记工具/流体瓶
     static
     {
         CREATIVE_TABS.register("tab", () -> CreativeModeTab.builder()
@@ -47,6 +52,8 @@ public class MaidMoreWork
                 .build());
     }
 
+    // 模组构造函数：注册所有 DeferredRegister 到 mod 事件总线
+    // 注册游戏事件监听（女仆加入世界、命令注册）
     public MaidMoreWork(IEventBus modBus)
     {
         ModMemories.MEMORY_MODULE_TYPES.register(modBus);
@@ -66,7 +73,8 @@ public class MaidMoreWork
     }
 
     // 女仆加入世界时，从 Attachment 恢复 LOG_BLOCKS / LEAVES_BLOCKS 到 Memory
-    // 仅当 Memory 为空时恢复（女仆正在执行其他任务或没活干时才恢复）
+    // 仅当 Memory 为空时恢复（避免覆盖正在执行的任务）
+    // 确保世界重进后女仆可以继续之前的伐木/挖矿工作
     private void onEntityJoinLevel(EntityJoinLevelEvent event)
     {
         if (event.getLevel().isClientSide()) return;

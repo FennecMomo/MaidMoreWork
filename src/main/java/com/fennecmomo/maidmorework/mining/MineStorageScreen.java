@@ -1,39 +1,29 @@
 package com.fennecmomo.maidmorework.mining;
 
-import com.fennecmomo.momolib.template.C_Container;
-import com.fennecmomo.momolib.template.S_Container;
+import com.fennecmomo.momolib.template.UI.GenericContainerScreen;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
-// 矿井方块储物容器 Screen
-// 用 momoLib S_Container 渲染背景和标题
-public class MineStorageScreen extends AbstractContainerScreen<MineStorageMenu>
+// 矿井方块储物容器 Screen（仅客户端）
+// 继承 GenericContainerScreen 自动处理背景和标题渲染
+// 自定义渲染逻辑：超过 64 堆叠的物品不显示原生数字
+// 而是渲染前临时改为 1（阻止原生显示 "64"），渲染后画自定义数量文字
+public class MineStorageScreen extends GenericContainerScreen<MineStorageMenu>
 {
     public MineStorageScreen(MineStorageMenu menu, Inventory inv, Component title)
     {
-        super(menu, inv, title,
-                C_Container.PAD + C_Container.PLAYER_COLS * C_Container.SLOT + C_Container.PAD,
-                C_Container.PAD + C_Container.TITLE_H + 3 * C_Container.SLOT
-                        + C_Container.GAP + C_Container.PLAYER_ROWS * C_Container.SLOT
-                        + C_Container.HOTBAR_ROWS * C_Container.SLOT + C_Container.PAD);
+        super(menu, inv, title);
     }
 
-    @Override
-    protected void init()
-    {
-        super.init();
-        S_Container.initTitle(this, leftPos, topPos, this.font, this::addRenderableWidget);
-    }
-
+    // 提取渲染状态（MC 26.x 新渲染管线）
+    // 渲染前记录每个槽位的真实数量，临时改为 1（阻止原生显示 "64"）
+    // 渲染后恢复真实数量，并画自定义数量文字（右下角显示实际堆叠数）
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick)
     {
-        S_Container.renderBg(this, g, leftPos, topPos, imageWidth, imageHeight);
-
         // 渲染前：记录每个槽位的真实数量，临时改为 1（阻止原生显示 "64"）
         int[] realCounts = new int[27];
         for (int i = 0; i < 27; i++)
@@ -58,19 +48,13 @@ public class MineStorageScreen extends AbstractContainerScreen<MineStorageMenu>
 
             if (realCounts[i] > 64)
             {
-                int sx = leftPos + slot.x;
-                int sy = topPos + slot.y;
+                int sx = this.leftPos + slot.x;
+                int sy = this.topPos + slot.y;
                 String text = String.valueOf(realCounts[i]);
                 int textWidth = this.font.width(text);
-                g.text(this.font, net.minecraft.network.chat.Component.literal(text),
+                g.text(this.font, Component.literal(text),
                         sx + 17 - textWidth, sy + 10, 0xFFFFFFFF, true);
             }
         }
-    }
-
-    @Override
-    protected void extractLabels(GuiGraphicsExtractor g, int mouseX, int mouseY)
-    {
-        // 标题由 S_Container.initTitle 处理，跳过默认标签
     }
 }

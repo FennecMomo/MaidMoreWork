@@ -8,7 +8,17 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.material.Fluid;
 
-// 液体瓶：动态名字，装水/岩浆/空
+// 液体瓶物品（动态名字）
+//
+// 用于女仆工作中的液体存储（如矿井中的水/岩浆处理）
+// 通过 DataComponent (FLUID_TYPE) 存储装的是哪种原版液体
+//
+// 动态名字：
+//   空瓶 → "空瓶"
+//   装水 → "水瓶"
+//   装岩浆 → "岩浆瓶"
+//   名字根据 DataComponent 中的液体类型动态生成
+//
 // TODO: 后续做成能直接塞到容器（如流体储罐）里交互，右键取水/放水暂不实现
 public class FluidBottleItem extends Item
 {
@@ -17,6 +27,9 @@ public class FluidBottleItem extends Item
         super(properties);
     }
 
+    // 动态名字：根据 DataComponent 中的液体类型生成名字
+    // 无液体或未知液体时显示 "空瓶"
+    // 有液体时显示 "液体名 + 瓶"（如 "水瓶"、"岩浆瓶"）
     @Override
     public Component getName(ItemStack stack)
     {
@@ -29,11 +42,15 @@ public class FluidBottleItem extends Item
         return Component.translatable(fluid.getFluidType().getDescriptionId()).append("瓶");
     }
 
+    // 设置液体类型：写入 DataComponent
+    // MiningBehavior 中女仆装液体时调用
     public static void setFluid(ItemStack stack, ResourceKey<Fluid> key)
     {
         stack.set(MineRegistration.FLUID_TYPE.get(), key);
     }
 
+    // 获取液体类型：从 DataComponent 读取
+    // 返回 null 表示空瓶
     public static ResourceKey<Fluid> getFluid(ItemStack stack)
     {
         return stack.get(MineRegistration.FLUID_TYPE.get());

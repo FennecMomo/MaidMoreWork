@@ -1,33 +1,44 @@
 package com.fennecmomo.maidmorework.mining;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
-import com.fennecmomo.momolib.template.ConfirmMenu;
+import com.fennecmomo.momolib.template.Data.ConfirmPopupMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.world.InteractionHand;
+import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.bus.api.ICancellableEvent;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 
 import java.util.UUID;
 
-@EventBusSubscriber(modid = MaidMoreWork.MODID)
+// 矿井标记物事件处理器（NeoForge 事件监听）
+// 处理标记物左/右键交互：
+// - 左键方块：设角点1
+// - 右键方块：设角点2（或点击矿井方块进入管理交互）
+// - 右键空气：两角点齐全时弹出确认创建窗口
+// 创建流程：点击角点 → 设第二个角点 → 弹确认窗 → 确认后放置 MineBlock
 public class MineMarkerEventHandler
 {
+
+    // ===================== 事件入口 =====================
+
+    // 事件入口：左键方块时设置角点1
     @SubscribeEvent
     public static void onLeftClickBlock(PlayerInteractEvent.LeftClickBlock event)
     {
         handleCornerClick(event, event.getEntity(), event.getPos(), true);
     }
 
+    // 事件入口：右键方块时检查是否为矿井方块（管理交互）或普通方块（设角点2）
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event)
     {
@@ -40,33 +51,49 @@ public class MineMarkerEventHandler
             // 不阻止，让MineBlock的自然交互走（但Block没use方法了，走事件处理）
             if (stack.getItem() instanceof MineMarkerItem)
             {
-                if (event instanceof net.neoforged.bus.api.ICancellableEvent c)
-        {
-            c.setCanceled(true);
-        }
+                if (event instanceof ICancellableEvent c)
+                {
+                    c.setCanceled(true);
+                }
                 handleMineBlockClick(player, event.getPos());
             }
             return;
         }
 
-        if (!(stack.getItem() instanceof MineMarkerItem)) return;
+        if (!(stack.getItem() instanceof MineMarkerItem))
+        {
+            return;
+        }
         handleCornerClick(event, player, event.getPos(), false);
     }
 
+    // 事件入口：右键空气时弹出确认创建窗口（两角点必须已设置）
     @SubscribeEvent
     public static void onRightClickItem(PlayerInteractEvent.RightClickItem event)
     {
         Player player = event.getEntity();
         ItemStack stack = player.getItemInHand(event.getHand());
-        if (!(stack.getItem() instanceof MineMarkerItem)) return;
-        if (!MineMarkerItem.isBound(stack)) return;
+        if (!(stack.getItem() instanceof MineMarkerItem))
+        {
+            return;
+        }
+        if (!MineMarkerItem.isBound(stack))
+        {
+            return;
+        }
 
         Level level = event.getLevel();
-        if (level.isClientSide()) return;
+        if (level.isClientSide())
+        {
+            return;
+        }
 
         UUID id = MineMarkerItem.getBoundId(stack);
         MineInstance inst = MineInstanceManager.get(level, id);
-        if (inst == null || !inst.isComplete()) return;
+        if (inst == null || !inst.isComplete())
+        {
+            return;
+        }
 
         // 完整矿井 + 右键空气 → 弹确认窗
         if (player instanceof ServerPlayer sp)
@@ -75,10 +102,16 @@ public class MineMarkerEventHandler
         }
     }
 
+    // ===================== 管理交互 =====================
+
+    // 点击矿井方块：弹出管理确认窗口（删除/编辑按钮）
     private static void handleMineBlockClick(Player player, BlockPos pos)
     {
         Level level = player.level();
-        if (level.isClientSide() || !(player instanceof ServerPlayer sp)) return;
+        if (level.isClientSide() || !(player instanceof ServerPlayer sp))
+        {
+            return;
+        }
 
         if (level.getBlockEntity(pos) instanceof MineBlockEntity be && be.hasInstance())
         {
@@ -87,17 +120,20 @@ public class MineMarkerEventHandler
         }
     }
 
+    // 弹出矿井管理确认窗口（删除/编辑按钮）
+    // 用 ConfirmPopupMenu 显示两个操作选项，每个选项对应一条命令
     private static void sendManageMessage(ServerPlayer sp, UUID id)
     {
         sp.openMenu(
-                new net.minecraft.world.SimpleMenuProvider(
-                        (containerId, inv, player) ->
-                                new ConfirmMenu(containerId, inv,
-                                        "矿井管理", "",
-                                        "删除", "maidmorework mine delete " + id,
-                                        "编辑", "maidmorework mine edit " + id),
+                new SimpleMenuProvider(
+                        (containerId, inv, player)
+                        -> new ConfirmPopupMenu(containerId, inv,
+                                "矿井管理", "",
+                                "删除", "maidmorework mine delete " + id,
+                                "编辑", "maidmorework mine edit " + id),
                         Component.literal("矿井管理")),
-                buf -> {
+                buf ->
+                {
                     buf.writeUtf("矿井管理");
                     buf.writeUtf("");
                     buf.writeUtf("删除");
@@ -107,16 +143,28 @@ public class MineMarkerEventHandler
                 });
     }
 
+    // ===================== 角点点击 =====================
+
+    // 处理角点点击（左键/右键通用）
+    // 未绑定 → 创建矿井实例 + 设角点1 + 绑定标记工具
+    // 已绑定但未完成 → 设角点2
+    // 已绑定且已完成 → 更新对应角点
     private static void handleCornerClick(PlayerInteractEvent event, Player player,
-                                           BlockPos pos, boolean isLeft)
+            BlockPos pos, boolean isLeft)
     {
         ItemStack stack = player.getMainHandItem();
-        if (!(stack.getItem() instanceof MineMarkerItem)) return;
+        if (!(stack.getItem() instanceof MineMarkerItem))
+        {
+            return;
+        }
 
         Level level = event.getLevel();
-        if (level.isClientSide()) return;
+        if (level.isClientSide())
+        {
+            return;
+        }
 
-        if (event instanceof net.neoforged.bus.api.ICancellableEvent c)
+        if (event instanceof ICancellableEvent c)
         {
             c.setCanceled(true);
         }
@@ -156,14 +204,24 @@ public class MineMarkerEventHandler
         }
         else
         {
-            if (isLeft) inst.setClickPoint1(pos);
-            else inst.setClickPoint2(pos);
+            if (isLeft)
+            {
+                inst.setClickPoint1(pos);
+            }
+            else
+            {
+                inst.setClickPoint2(pos);
+            }
             player.sendSystemMessage(Component.literal("§e边角已更新"));
         }
 
         level.playSound(null, pos, SoundEvents.STONE_PLACE, SoundSource.PLAYERS, 0.5f, 1.0f);
     }
 
+    // ===================== 创建确认 =====================
+
+    // 弹出确认创建矿井的对话框，校验范围大小和中心方块冲突
+    // 最小范围 7x7（空心井最小 3x3），中心位置有方块时提示冲突
     private static void openConfirmScreen(ServerPlayer player, MineInstance inst, ItemStack marker)
     {
         BlockPos center = inst.center();
@@ -173,7 +231,7 @@ public class MineMarkerEventHandler
         BlockState centerState = level.getBlockState(center);
         boolean blocked = !centerState.isAir()
                 && !(level.getBlockEntity(center) instanceof MineBlockEntity mbe
-                      && mbe.getInstanceId().equals(inst.getId()));
+                && mbe.getInstanceId().equals(inst.getId()));
 
         // 检查最小范围 7x7（空心井最小3x3）
         int sizeX = inst.maxX() - inst.minX() + 1;
@@ -187,14 +245,15 @@ public class MineMarkerEventHandler
 
         String info = blocked ? "中心位置有方块冲突" : "";
         player.openMenu(
-                new net.minecraft.world.SimpleMenuProvider(
-                        (containerId, inv, p) ->
-                                new ConfirmMenu(containerId, inv,
-                                        "确认创建矿井？", info,
-                                        "确认", "maidmorework mine confirm " + inst.getId() + " " + blocked,
-                                        "取消", "maidmorework mine cancel " + inst.getId()),
+                new SimpleMenuProvider(
+                        (containerId, inv, p)
+                        -> new ConfirmPopupMenu(containerId, inv,
+                                "确认创建矿井？", info,
+                                "确认", "maidmorework mine confirm " + inst.getId() + " " + blocked,
+                                "取消", "maidmorework mine cancel " + inst.getId()),
                         Component.literal("确认创建矿井")),
-                buf -> {
+                buf ->
+                {
                     buf.writeUtf("确认创建矿井？");
                     buf.writeUtf(info);
                     buf.writeUtf("确认");
@@ -204,9 +263,11 @@ public class MineMarkerEventHandler
                 });
     }
 
+    // 确认后放置矿井方块（目前未被直接调用，由 MineCommand.confirmCreate 负责）
+    // 预留接口，后续可能改为直接在此处理
     private static void confirmAndPlace(ServerPlayer player, MineInstance inst,
-                                         BlockPos center, ItemStack marker,
-                                         ServerLevel level, boolean replaceBlock)
+            BlockPos center, ItemStack marker,
+            ServerLevel level, boolean replaceBlock)
     {
         if (replaceBlock && !level.getBlockState(center).isAir())
         {

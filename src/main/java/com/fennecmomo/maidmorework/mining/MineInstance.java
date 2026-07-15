@@ -4,14 +4,16 @@ import net.minecraft.core.BlockPos;
 
 import java.util.UUID;
 
-// 矿井实例数据
-// posNW和posSE：计算后的西北角和东南角坐标
+// 矿井实例数据（内存中的临时对象，不直接序列化）
+// 存储矿井的 ID、主人、两个角点坐标和计算后的西北/东南角
+// 角点由玩家用标记工具点击设置，两个点击点确定矿区范围
+// 边长强制为奇数（planner 需要奇数边长才能对称覆盖）
 public class MineInstance
 {
-    private final UUID id;
-    private final UUID owner;
-    private BlockPos posNW;
-    private BlockPos posSE;
+    private final UUID id;      // 矿井唯一标识
+    private final UUID owner;   // 矿井主人（放置矿井的玩家）
+    private BlockPos posNW;     // 计算后的西北角坐标
+    private BlockPos posSE;     // 计算后的东南角坐标
 
     public MineInstance(UUID id, UUID owner, BlockPos nw, BlockPos se)
     {
@@ -27,10 +29,12 @@ public class MineInstance
     public BlockPos getPosNW() { return posNW; }
     public BlockPos getPosSE() { return posSE; }
 
-    // 设一个点击点，两点击点都设好后自动算posNW/posSE
+    // 设置点击点，两点击点都设好后自动算 posNW/posSE
+    // 第三个点击点会覆盖第一个
     private BlockPos clicked1 = null;
     private BlockPos clicked2 = null;
 
+    // 添加点击点：第一次设 clicked1，第二次设 clicked2，之后覆盖 clicked1
     public void addClickPoint(BlockPos pos)
     {
         if (clicked1 == null) clicked1 = pos;
@@ -42,7 +46,8 @@ public class MineInstance
     public void setClickPoint1(BlockPos pos) { clicked1 = pos; recomputeCorners(); }
     public void setClickPoint2(BlockPos pos) { clicked2 = pos; recomputeCorners(); }
 
-    // 更新两点击点的Y坐标为玩家高度
+    // 更新两点击点的 Y 坐标为玩家高度（标记工具操作时调用）
+    // 确保矿区范围的高度与玩家当前站位一致
     public void updateHeights(int playerY)
     {
         if (clicked1 != null) clicked1 = new BlockPos(clicked1.getX(), playerY, clicked1.getZ());
@@ -50,6 +55,7 @@ public class MineInstance
         recomputeCorners();
     }
 
+    // 两个角点都已设置
     public boolean isComplete()
     {
         return posNW != null && posSE != null;
@@ -64,7 +70,8 @@ public class MineInstance
         return n;
     }
 
-    // 从点击点计算posNW/posSE（单数边长化）
+    // 从点击点计算 posNW/posSE（单数边长化）
+    // 强制边长为偶数距离，确保 mineL/mineW = 奇数（planner 需要奇数边长对称覆盖）
     private void recomputeCorners()
     {
         if (clicked1 == null || clicked2 == null)
@@ -83,6 +90,7 @@ public class MineInstance
     }
 
     // 取偶数距离，保证 mineL = 奇数（planner 需要奇数边长才能对称覆盖）
+    // 例：|a-b|=5 时返回 4，mineL = 4+1 = 5（奇数）
     private static int odd(int a, int b)
     {
         int d = Math.abs(a - b);

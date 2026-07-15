@@ -21,16 +21,28 @@ import java.util.List;
 
 import net.minecraft.world.level.block.Blocks;
 
-// 矿井管理命令
-// /maidmorework mine delete <id> — 删除矿井
-// /maidmorework mine edit <id>  — 重新绑定到标记工具
+// 矿井管理命令（Brigadier 命令注册）
+// 提供矿井的完整生命周期管理：
+//   /maidmorework mine delete <id>  — 删除矿井（销毁实体方块 + 移除实例）
+//   /maidmorework mine edit <id>    — 编辑矿井（绑定标记工具重设角点）
+//   /maidmorework mine confirm <id> <blocked> — 确认创建（放置 MineBlock + 解绑工具）
+//   /maidmorework mine cancel <id>  — 取消创建（删除实例 + 解绑工具）
+//   /maidmorework mine showdig      — 调试：清空最近矿井的一个周期挖区
+//   /maidmorework mine showstep <n> — 调试：只清空周期内第 n 层
+//
+// confirm/cancel 由 MineMarkerEventHandler 弹出的确认窗口触发
+// 确认窗口点击后自动执行对应命令
 public class MineCommand
 {
+    // 注册命令入口（NeoForge RegisterCommandsEvent 回调）
+    // 由 MaidMoreWork 的事件处理器调用
     public static void onRegisterCommands(RegisterCommandsEvent event)
     {
         register(event.getDispatcher());
     }
 
+    // 注册所有 /maidmorework mine 子命令
+    // 使用 Brigadier 的链式 API 构建命令树
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher)
     {
         dispatcher.register(Commands.literal("maidmorework")
@@ -72,6 +84,9 @@ public class MineCommand
                 ));
     }
 
+    // 删除矿井：找到实体方块并销毁 + 删除实例
+    // 以实例中心为原点搜索 16 格范围找到对应的 MineBlockEntity
+    // 然后移除方块并从 MineInstanceManager 删除实例
     private static int deleteMine(CommandSourceStack source, String idStr)
     {
         ServerPlayer player = source.getPlayer();
@@ -112,6 +127,9 @@ public class MineCommand
         return 1;
     }
 
+    // 编辑矿井：销毁旧方块 + 绑定标记工具重新设置角点
+    // 流程：销毁旧的 MineBlock → 找玩家手中的标记工具 → 解绑旧 ID → 绑定当前 ID
+    // 绑定后玩家可以用标记工具重新点击设置角点
     private static int editMine(CommandSourceStack source, String idStr)
     {
         ServerPlayer player = source.getPlayer();
@@ -159,6 +177,10 @@ public class MineCommand
         return 1;
     }
 
+    // 确认创建：放置矿井方块 + 解绑标记工具
+    // 流程：校验实例完整性 → 清理中心位置冲突方块 → 放置 MineBlock
+    //       → 初始化 BlockEntity 数据 → 粒子提示 → 解绑工具
+    // blocked=true 表示中心位置有冲突方块，需要先破坏
     private static int confirmCreate(CommandSourceStack source, String idStr, boolean blocked)
     {
         ServerPlayer player = source.getPlayer();
@@ -205,6 +227,8 @@ public class MineCommand
         return 1;
     }
 
+    // 取消创建：删除实例 + 解绑标记工具
+    // 玩家点击确认窗口的“取消”按钮时触发
     private static int cancelCreate(CommandSourceStack source, String idStr)
     {
         ServerPlayer player = source.getPlayer();
@@ -229,6 +253,8 @@ public class MineCommand
     }
 
     // 调试命令：找到最近矿井，清空一个周期的挖区方块
+    // 搜索 32 格内最近的 MineBlockEntity，然后调用 getAllDigBlocksForCycle()
+    // 将所有挖区方块替换为空气，用于快速测试螺旋挖掘进度
     private static int showdig(CommandSourceStack source)
     {
         ServerPlayer player = source.getPlayer();
@@ -271,7 +297,8 @@ public class MineCommand
         return count;
     }
 
-    // 调试命令：只挖周期内第layerIndex层Y（0-based）
+    // 调试命令：只挖周期内第 layerIndex 层 Y（0-based）
+    // 用于逐层调试螺旋楼梯的保留区分布，每层调用一次查看效果
     private static int showstep(CommandSourceStack source, int index)
     {
         ServerPlayer player = source.getPlayer();

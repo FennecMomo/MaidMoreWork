@@ -18,12 +18,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-// SPBlock的管理器
+// SPBlock 的管理器（纯静态工具类）
+// 提供方块替换、蓝图标记、收集销毁、还原等核心操作
+// 整个伐木流程：replaceBlocks → markBlueprint → collectBlock
+// 中断恢复：restoreAll（SPBlock 还原回原始方块）
 public class SPBlockManager
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
-    // 把一批方块替换成SPBlock，绑定到指定实体
+    // 把一批方块替换成 SPBlock，绑定到指定实体
+    // 原始方块的 BlockState 保存在 SPBlockEntity 里，后续可还原
+    // 跳过空气和已经是 SPBlock 的位置，避免重复替换
     public static void replaceBlocks(ServerLevel level, List<BlockPos> positions, UUID ownerUuid)
     {
         int count = 0;
@@ -57,8 +62,9 @@ public class SPBlockManager
         LOGGER.info("SPBlockManager: replaced {} blocks with SPBlock, owner={}", count, ownerUuid);
     }
 
-    // 标记某个SPBlock为蓝图状态
-    // 只改BlockEntity的state字段 + 手动发包同步客户端
+    // 标记某个 SPBlock 为蓝图状态（SOLID → BLUEPRINT）
+    // 只改 BlockEntity 的 state 字段 + 手动发包同步客户端
+    // 已经是蓝图的跳过，避免重复发包
     public static void markBlueprint(ServerLevel level, BlockPos pos)
     {
         if (!level.isLoaded(pos))
@@ -77,7 +83,8 @@ public class SPBlockManager
         spbe.setBlockState2(SPBlockEntity.State.BLUEPRINT);
     }
 
-    // 检查某个位置是否是蓝图状态的SPBlock
+    // 检查某个位置是否是蓝图状态的 SPBlock
+    // 用于 collectBlock 前置条件检查：只有蓝图状态才可被收集销毁
     public static boolean isBlueprint(ServerLevel level, BlockPos pos)
     {
         if (!level.isLoaded(pos))
@@ -92,7 +99,9 @@ public class SPBlockManager
         return false;
     }
 
-    // 销毁蓝图状态的SPBlock，掉落物放入女仆背包，塞不下的从方块位置爆出
+    // 销毁蓝图状态的 SPBlock，掉落物放入女仆背包，塞不下的从方块位置爆出
+    // 流程：还原原始方块 → TLM 掉落物收集 → 销毁方块 → 播放破坏音效
+    // 非蓝图状态直接返回 false，不做任何操作
     public static boolean collectBlock(ServerLevel level, BlockPos pos, LivingEntity entity)
     {
         if (!isBlueprint(level, pos))
@@ -105,7 +114,7 @@ public class SPBlockManager
             return false;
         }
         BlockState originalState = spbe.getOriginalState();
-        // 先还原回原始方块
+        // 先还原回原始方块，这样掉落物计算基于原始方块
         level.setBlockAndUpdate(pos, originalState);
         // 女仆走 TLM 内置的掉落物收集（自动塞背包+溢出爆地上）
         if (entity instanceof com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid maid)
@@ -120,7 +129,8 @@ public class SPBlockManager
         return true;
     }
 
-    // 把单个SPBlock还原回原始方块
+    // 把单个 SPBlock 还原回原始方块（用于中断恢复）
+    // 直接覆盖 SPBlock，恢复为保存的 originalState
     public static void restoreBlock(ServerLevel level, BlockPos pos)
     {
         if (!level.isLoaded(pos))
@@ -136,7 +146,8 @@ public class SPBlockManager
         level.setBlockAndUpdate(pos, original);
     }
 
-    // 把一批SPBlock全部还原回原始方块
+    // 把一批 SPBlock 全部还原回原始方块（用于砍伐中断时的恢复）
+    // 逐个调用 restoreBlock，跳过未加载的区块
     public static void restoreAll(ServerLevel level, List<BlockPos> positions)
     {
         int count = 0;
