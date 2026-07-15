@@ -1,10 +1,7 @@
-package com.fennecmomo.maidmorework.entity.ai;
+package com.fennecmomo.maidmorework.mining;
 
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
-import com.fennecmomo.maidmorework.mining.DigTask;
-import com.fennecmomo.maidmorework.mining.MineBlockEntity;
-import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
@@ -484,7 +481,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
     }
 
     // 气泡冷却追踪（key → 上次添加时的 gameTick）
-    // 用于防止同一种提示反复刷屏，比如“需要垫脚方块”
+    // 用于防止同一种提示反复刷屏，比如"需要垫脚方块"
     private final Map<Long, Long> bubbleLastTick = new HashMap<>();
 
     // 带冷却的气泡显示，防止累积
@@ -503,7 +500,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
     // 通用物资请求：检查是否在矿井附近 → 从容器取物 → 取不到则显示气泡提示
     // predicate: 判断物品是否匹配（如 isScaffoldItem、isTorchItem）
     // bubbleKey: 气泡冷却 key（避免重复添加同类提示）
-    // bubbleText: 气泡提示文本（如“需要垫脚方块”）
+    // bubbleText: 气泡提示文本（如"需要垫脚方块"）
     // 返回 true 表示成功取到物资
     private boolean requestItemFromMineBlock(
             ServerLevel level, EntityMaid maid,

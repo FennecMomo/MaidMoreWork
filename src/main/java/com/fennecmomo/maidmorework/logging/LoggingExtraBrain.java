@@ -1,5 +1,6 @@
-package com.fennecmomo.maidmorework;
+package com.fennecmomo.maidmorework.logging;
 
+import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.api.entity.ai.IExtraMaidBrain;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 

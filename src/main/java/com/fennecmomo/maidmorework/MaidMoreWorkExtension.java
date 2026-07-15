@@ -1,7 +1,9 @@
 package com.fennecmomo.maidmorework;
 
-import com.fennecmomo.maidmorework.entity.ai.LoggingTask;
-import com.fennecmomo.maidmorework.entity.ai.MiningTask;
+import com.fennecmomo.maidmorework.logging.LoggingTask;
+import com.fennecmomo.maidmorework.logging.LoggingExtraBrain;
+import com.fennecmomo.maidmorework.mining.MiningTask;
+import com.fennecmomo.maidmorework.mining.MiningExtraBrain;
 import com.github.tartaricacid.touhoulittlemaid.api.ILittleMaid;
 import com.github.tartaricacid.touhoulittlemaid.api.LittleMaidExtension;
 import com.github.tartaricacid.touhoulittlemaid.entity.ai.brain.ExtraMaidBrainManager;
