@@ -128,7 +128,7 @@ public class MineMarkerEventHandler
         {
             // 未绑定 → 创建矿井实例
             MineInstance inst = MineInstanceManager.create(level, owner, pos);
-            inst.updateAllHeights(player.blockPosition().getY());
+            inst.updateHeights(player.blockPosition().above().getY());
             MineMarkerItem.bind(stack, inst.getId());
             player.sendSystemMessage(Component.literal("§a角1已设置: " + pos.toShortString()));
             level.playSound(null, pos, SoundEvents.STONE_PLACE, SoundSource.PLAYERS, 0.5f, 1.0f);
@@ -141,23 +141,23 @@ public class MineMarkerEventHandler
         {
             inst = MineInstanceManager.create(level, owner, pos);
             MineMarkerItem.bind(stack, inst.getId());
-            inst.updateAllHeights(player.blockPosition().getY());
+            inst.updateHeights(player.blockPosition().above().getY());
             player.sendSystemMessage(Component.literal("§e矿井实例已丢失，已重新创建"));
             return;
         }
 
         // 更新高度
-        inst.updateAllHeights(player.blockPosition().getY());
+        inst.updateHeights(player.blockPosition().above().getY());
 
         if (!inst.isComplete())
         {
-            inst.setCorner2(pos);
+            inst.setClickPoint2(pos);
             player.sendSystemMessage(Component.literal("§a角2已设置: " + pos.toShortString()));
         }
         else
         {
-            if (isLeft) inst.setCorner1(pos);
-            else inst.setCorner2(pos);
+            if (isLeft) inst.setClickPoint1(pos);
+            else inst.setClickPoint2(pos);
             player.sendSystemMessage(Component.literal("§e边角已更新"));
         }
 
@@ -175,14 +175,13 @@ public class MineMarkerEventHandler
                 && !(level.getBlockEntity(center) instanceof MineBlockEntity mbe
                       && mbe.getInstanceId().equals(inst.getId()));
 
-        // 检查最小范围 3x3x3
+        // 检查最小范围 7x7（空心井最小3x3）
         int sizeX = inst.maxX() - inst.minX() + 1;
-        int sizeY = inst.maxY() - inst.minY() + 1;
         int sizeZ = inst.maxZ() - inst.minZ() + 1;
-        if (sizeX < 3 || sizeZ < 3)
+        if (sizeX < 7 || sizeZ < 7)
         {
             player.sendSystemMessage(Component.literal(
-                    String.format("§c矿井范围过小(%dx%d)，最小需要3x3", sizeX, sizeZ)));
+                    String.format("§c矿井范围过小(%dx%d)，最小需要7x7", sizeX, sizeZ)));
             return;
         }
 
@@ -218,7 +217,7 @@ public class MineMarkerEventHandler
         level.setBlockAndUpdate(center, mineState);
         if (level.getBlockEntity(center) instanceof MineBlockEntity mbe)
         {
-            mbe.setInstanceData(inst.getId(), inst.getOwner(), inst.getCorner1(), inst.getCorner2());
+            mbe.setInstanceData(inst.getId(), inst.getOwner(), inst.getPosNW(), inst.getPosSE());
         }
 
         MineMarkerItem.unbind(marker);

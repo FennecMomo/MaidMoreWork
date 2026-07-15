@@ -5,10 +5,17 @@ import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.spblock.SPRegistration;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
+import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.List;
 
@@ -19,15 +26,40 @@ public class MaidMoreWork
 {
     public static final String MODID = "maidmorework";
 
+    public static final DeferredRegister<CreativeModeTab> CREATIVE_TABS =
+            DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
+
+    public static final ResourceKey<CreativeModeTab> TAB_KEY =
+            ResourceKey.create(Registries.CREATIVE_MODE_TAB,
+                    net.minecraft.resources.Identifier.fromNamespaceAndPath(MODID, "tab"));
+
+    static
+    {
+        CREATIVE_TABS.register("tab", () -> CreativeModeTab.builder()
+                .title(Component.literal("MaidMoreWork"))
+                .icon(() -> new ItemStack(MineRegistration.MINE_MARKER.get()))
+                .displayItems((params, output) ->
+                {
+                    output.accept(MineRegistration.MINE_BLOCK.get());
+                    output.accept(MineRegistration.MINE_MARKER.get());
+                    output.accept(MineRegistration.FLUID_BOTTLE.get());
+                })
+                .build());
+    }
+
     public MaidMoreWork(IEventBus modBus)
     {
         ModMemories.MEMORY_MODULE_TYPES.register(modBus);
         ModAttachments.ATTACHMENT_TYPES.register(modBus);
         SPRegistration.BLOCKS.register(modBus);
         SPRegistration.BLOCK_ENTITIES.register(modBus);
+        SPRegistration.ITEMS.register(modBus);
         MineRegistration.BLOCKS.register(modBus);
         MineRegistration.BLOCK_ENTITIES.register(modBus);
         MineRegistration.ITEMS.register(modBus);
+        MineRegistration.DATA_COMPONENTS.register(modBus);
+        MineRegistration.MENUS.register(modBus);
+        CREATIVE_TABS.register(modBus);
 
         NeoForge.EVENT_BUS.addListener(this::onEntityJoinLevel);
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);

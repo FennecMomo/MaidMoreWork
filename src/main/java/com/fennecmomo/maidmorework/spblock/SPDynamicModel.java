@@ -31,11 +31,11 @@ public class SPDynamicModel implements DynamicBlockStateModel
     public static final net.neoforged.neoforge.model.data.ModelProperty<SPBlockEntity.State> BLOCK_STATE =
             new net.neoforged.neoforge.model.data.ModelProperty<>();
 
-    // 玻璃模型ID
-    static final Identifier GLASS_MODEL_ID =
-            Identifier.fromNamespaceAndPath("minecraft", "block/glass");
+    // SPBlock模型ID（天蓝色半透明方块）
+    static final Identifier SP_BLOCK_MODEL_ID =
+            Identifier.fromNamespaceAndPath("maidmorework", "block/sp_block");
 
-    // 玻璃模型的BlockStateModelPart，bake时初始化
+    // SPBlock模型的BlockStateModelPart，bake时初始化
     BlockStateModelPart glassModelPart;
 
     @Override
@@ -88,7 +88,7 @@ public class SPDynamicModel implements DynamicBlockStateModel
     public void initGlassModel(ModelBaker baker)
     {
         // 创建一个新的Variant指向玻璃模型，bake后得到BlockStateModelPart
-        Variant glassVariant = new Variant(GLASS_MODEL_ID);
+        Variant glassVariant = new Variant(SP_BLOCK_MODEL_ID);
         glassModelPart = glassVariant.bake(baker);
     }
 }

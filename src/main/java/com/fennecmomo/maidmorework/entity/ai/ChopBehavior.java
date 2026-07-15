@@ -66,8 +66,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
             }
         }
         boolean hasBlocks = blocks.isPresent() && !blocks.get().isEmpty();
-        LOGGER.info("ChopBehavior checkExtraStart: hasBlocks={} size={} maid={}",
-                hasBlocks, blocks.map(List::size).orElse(0), maid.getId());
         return hasBlocks;
     }
 

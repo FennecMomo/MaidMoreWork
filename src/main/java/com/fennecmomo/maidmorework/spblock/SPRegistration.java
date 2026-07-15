@@ -2,6 +2,9 @@ package com.fennecmomo.maidmorework.spblock;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -23,6 +26,10 @@ public class SPRegistration
     public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
             DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, MaidMoreWork.MODID);
 
+    // 物品注册表（用于 BlockItem）
+    public static final DeferredRegister.Items ITEMS =
+            DeferredRegister.createItems(MaidMoreWork.MODID);
+
     // SPBlock方块本体
     // 不可破坏（strength(-1)等同于基岩），无掉落表，不阻挡光线
     public static final DeferredHolder<Block, SPBlock> SP_BLOCK =
@@ -34,6 +41,10 @@ public class SPRegistration
                             .dynamicShape()         // 碰撞箱动态计算（根据BlockEntity里的原始方块决定）
                             .pushReaction(PushReaction.BLOCK) // 被活塞推时方块不移动
             );
+
+    // SPBlock 的 BlockItem（MC 26.x 必须显式注册）
+    public static final DeferredHolder<Item, BlockItem> SP_BLOCK_ITEM =
+            ITEMS.registerSimpleBlockItem(SP_BLOCK);
 
     // SPBlock对应的BlockEntity类型
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<SPBlockEntity>> SP_BLOCK_ENTITY =

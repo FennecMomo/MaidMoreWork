@@ -29,8 +29,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private static final long NO_RESOURCE_KEY = 9528L;
     // 每 tick 处理的螺旋点数
     private static final int SPIRAL_BATCH = 100;
-    // 家园模式下螺旋耗尽后的静默 tick 数（与气泡显示时长一致）
-    private static final int SILENCE_TICKS = 15 * 20;
+    // 家园模式下螺旋耗尽后的静默 tick 数
+    private static final int SILENCE_TICKS = 2 * 20;
     // 家园模式 Y 轴扩展范围
     private static final int HOME_Y_RANGE = 16;
 
@@ -79,7 +79,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         {
             String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("工作");
             maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
-                    "跟随模式下无法" + action + "，请切换到待机或家园模式", FOLLOW_WARN_KEY);
+                    "跟随模式下无法" + action + "，请开启Home模式", FOLLOW_WARN_KEY);
             silenceTicks = SILENCE_TICKS;
             return false;
         }

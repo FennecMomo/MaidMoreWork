@@ -1,0 +1,11 @@
+{
+  "block.maidmorework.mine_block": "矿井方块",
+  "block.maidmorework.sp_block": "临时占位方块",
+  "item.maidmorework.mine_marker": "矿区标记工具",
+  "item.maidmorework.fluid_bottle": "液体瓶",
+  "item.maidmorework.fluid_bottle.empty": "空瓶",
+  "task.maidmorework.mining": "采矿",
+  "task.maidmorework.logging": "伐木",
+  "task.maidmorework.eat": "进食",
+  "task.maidmorework.idle": "空闲"
+}

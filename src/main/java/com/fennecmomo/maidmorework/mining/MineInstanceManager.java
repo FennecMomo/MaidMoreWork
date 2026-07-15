@@ -23,10 +23,11 @@ public class MineInstanceManager
     }
 
     // 创建新实例
-    public static MineInstance create(Level level, UUID owner, BlockPos corner)
+    public static MineInstance create(Level level, UUID owner, BlockPos pos)
     {
         UUID id = UUID.randomUUID();
-        MineInstance inst = new MineInstance(id, owner, corner, null);
+        MineInstance inst = new MineInstance(id, owner, null, null);
+        inst.setClickPoint1(pos);
         getMap(level).put(id, inst);
         return inst;
     }
