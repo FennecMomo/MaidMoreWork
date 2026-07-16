@@ -1,11 +1,18 @@
 package com.fennecmomo.maidmorework.mining;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.search.SearchBehavior;
 import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.mojang.datafixers.util.Pair;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -14,12 +21,6 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.ai.behavior.BehaviorControl;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 // 挖矿行为包（IMaidTask 实现，TLM 工作模式）
 //

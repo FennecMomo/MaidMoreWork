@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.search;
 
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 

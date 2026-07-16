@@ -15,6 +15,7 @@ import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 
@@ -55,8 +56,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 家园模式下螺旋耗尽后的静默 tick 数
     private static final int SILENCE_TICKS = 2 * 20;
 
-    // 家园模式 Y 轴扩展范围
-    private static final int HOME_Y_RANGE = 16;
 
     // ===================== 配置字段 =====================
 
@@ -269,13 +268,12 @@ public class SearchBehavior extends Behavior<EntityMaid>
     }
 
     // 从当前点向 26 方向扩展螺旋（3x3x3 立方体的所有偏移）
-    // 家园限制模式下检查 isWithinHome + Y±16
+    // 家园限制模式下用 isWithinHome 判定
     // 非家园模式下用固定 scanHalfXZ/scanYDown/scanYUp 作为边界
     // 用 visited 集合防止重复访问
     private void expandSpiral(BlockPos point, EntityMaid maid)
     {
         boolean restricted = useHomeRestriction && maid.hasHome();
-        int centerY = restricted ? maid.getHomePosition().getY() : 0;
 
         for (int dx = -1; dx <= 1; dx++)
         {
@@ -289,39 +287,25 @@ public class SearchBehavior extends Behavior<EntityMaid>
                     {
                         if (restricted)
                         {
-                            addIfWithinHomeRange(nb, maid, centerY);
+                            if (maid.isWithinHome(nb))
+                            {
+                                spiralQueue.add(nb);
+                            }
                         }
                         else
                         {
-                            addIfWithinFixedRange(nb);
+                            int relX = Math.abs(nb.getX() - spiralOrigin.getX());
+                            int relY = nb.getY() - spiralOrigin.getY();
+                            int relZ = Math.abs(nb.getZ() - spiralOrigin.getZ());
+                            if (relX <= scanHalfXZ && relZ <= scanHalfXZ
+                                    && relY >= -scanYDown && relY <= scanYUp)
+                            {
+                                spiralQueue.add(nb);
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-
-    // 家园范围检查：isWithinHome + Y±16
-    private void addIfWithinHomeRange(BlockPos nb, EntityMaid maid, int centerY)
-    {
-        if (maid.isWithinHome(nb)
-                && nb.getY() >= centerY - HOME_Y_RANGE
-                && nb.getY() <= centerY + HOME_Y_RANGE)
-        {
-            spiralQueue.add(nb);
-        }
-    }
-
-    // 固定范围检查：XZ 半径 + Y 上下范围
-    private void addIfWithinFixedRange(BlockPos nb)
-    {
-        int relX = Math.abs(nb.getX() - spiralOrigin.getX());
-        int relY = nb.getY() - spiralOrigin.getY();
-        int relZ = Math.abs(nb.getZ() - spiralOrigin.getZ());
-        if (relX <= scanHalfXZ && relZ <= scanHalfXZ
-                && relY >= -scanYDown && relY <= scanYUp)
-        {
-            spiralQueue.add(nb);
         }
     }
 
@@ -339,6 +323,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // 非限制模式：选随机方向导航到 20~35 格外的某个点
     // 螺旋耗尽后女仆走到新位置再重新初始化螺旋，覆盖更多区域
+    // Y 取目标 XZ 的地表高度，避免 here.getY() 导致走进墙里或悬空
     private void pickRandomAndMove(EntityMaid maid)
     {
         BlockPos here = maid.blockPosition();
@@ -346,7 +331,9 @@ public class SearchBehavior extends Behavior<EntityMaid>
         double dist = MIN_DIST + maid.getRandom().nextDouble() * (MAX_DIST - MIN_DIST);
         int x = here.getX() + (int) Math.round(Math.cos(angle) * dist);
         int z = here.getZ() + (int) Math.round(Math.sin(angle) * dist);
-        maid.getNavigation().moveTo(x, here.getY(), z, WALK_SPEED);
+        ServerLevel level = (ServerLevel) maid.level();
+        int groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+        maid.getNavigation().moveTo(x, groundY, z, WALK_SPEED);
     }
 
     // ===================== 目标清理 =====================
