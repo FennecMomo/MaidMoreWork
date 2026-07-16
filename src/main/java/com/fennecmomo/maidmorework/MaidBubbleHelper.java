@@ -27,11 +27,10 @@ public final class MaidBubbleHelper
     // ===================== 静态 API =====================
 
     // 显示一条纯文本气泡，持续 durationTicks 个 tick
-    // 持有文本后由 tick 自动管理显示与清除
     public static void showBubble(EntityMaid maid, String text, int durationTicks)
     {
         INSTANCES.computeIfAbsent(maid.getUUID(), k -> new MaidBubbleHelper())
-                .setBubble(text, durationTicks);
+                .setBubble(maid, text, durationTicks);
     }
 
     // 跟随模式专用警告气泡
@@ -68,75 +67,79 @@ public final class MaidBubbleHelper
     // ===================== 气泡设置 =====================
 
     // 设置持有文本并重置倒计时
-    // 如果当前已显示旧气泡，立即移除（被新文本覆盖）
-    private void setBubble(String text, int durationTicks)
+    // 如果有旧气泡正在显示，先从 ChatBubbleManager 移除（避免旧文本残留）
+    private void setBubble(EntityMaid maid, String text, int durationTicks)
     {
-        if (bubbleId >= 0)
+        if (maid.getChatBubbleManager().getChatBubbleDataCollection().containsKey(bubbleId))
         {
-            // 旧气泡正在显示，先移除（下一 tick 会显示新文本）
-            bubbleId = -1;
+            maid.getChatBubbleManager().removeChatBubble(bubbleId);
         }
         this.pendingText = text;
         this.remainTicks = durationTicks;
+        this.bubbleId = -1;
     }
 
     // ===================== 生命周期 tick =====================
 
-    // 每 tick 执行：倒计时 → 到期清除 → 气泡环境判断 → 显示/跳过/移除
+    // 每 tick 执行：持有文本判空 → 倒计时 → 气泡环境调度
     private void tick(EntityMaid maid)
     {
-        ChatBubbleDataCollection bubbles = maid.getChatBubbleManager().getChatBubbleDataCollection();
-
-        // ① 倒计时处理（最先执行）
-        if (remainTicks > 0)
-        {
-            remainTicks--;
-            if (remainTicks <= 0)
-            {
-                // 到期：移除正在显示的气泡 + 清空持有文本
-                if (bubbleId >= 0 && bubbles.containsKey(bubbleId))
-                {
-                    maid.getChatBubbleManager().removeChatBubble(bubbleId);
-                }
-                bubbleId = -1;
-                pendingText = null;
-                return;
-            }
-        }
-
-        // ② 无持有文本 → 结束
+        // 无持有文本 → 无需任何处理
         if (pendingText == null)
         {
             return;
         }
 
-        // ③ 气泡环境判断
-        int size = bubbles.size();
+        ChatBubbleDataCollection bubbles = maid.getChatBubbleManager().getChatBubbleDataCollection();
 
-        if (size == 0)
+        // 倒计时处理：递减 → 到期清除
+        if (tickCountdown(maid, bubbles))
+        {
+            return;
+        }
+
+        // 气泡环境调度
+        resolveDisplay(maid, bubbles);
+    }
+
+    // ===================== tick 子方法 =====================
+
+    // 倒计时递减：到期时移除气泡并清空持有文本，返回 true 表示已到期
+    private boolean tickCountdown(EntityMaid maid, ChatBubbleDataCollection bubbles)
+    {
+        if (remainTicks <= 0)
+        {
+            return false;
+        }
+        remainTicks--;
+        if (remainTicks <= 0)
+        {
+            // 到期：移除正在显示的气泡 + 清空持有文本
+            if (bubbles.containsKey(bubbleId))
+            {
+                maid.getChatBubbleManager().removeChatBubble(bubbleId);
+            }
+            bubbleId = -1;
+            pendingText = null;
+            return true;
+        }
+        return false;
+    }
+
+    // 气泡环境调度：无气泡时显示，有气泡时冲突处理
+    private void resolveDisplay(EntityMaid maid, ChatBubbleDataCollection bubbles)
+    {
+        if (bubbles.isEmpty())
         {
             // 无气泡 → 显示持有文本
             bubbleId = maid.getChatBubbleManager().addTextChatBubble(pendingText);
         }
-        else if (size == 1)
+        else if (bubbles.containsKey(bubbleId))
         {
-            if (bubbleId >= 0 && bubbles.containsKey(bubbleId))
-            {
-                // 唯一气泡是我们的 → 已显示，跳过
-            }
-            else
-            {
-                // 唯一气泡不是我们的 → 别人在显示，等待
-            }
+            // 我们的气泡在多个气泡中 → 移除避免叠加
+            maid.getChatBubbleManager().removeChatBubble(bubbleId);
+            bubbleId = -1;
         }
-        else
-        {
-            // 多气泡冲突 → 如果是我们的，移除
-            if (bubbleId >= 0 && bubbles.containsKey(bubbleId))
-            {
-                maid.getChatBubbleManager().removeChatBubble(bubbleId);
-                bubbleId = -1;
-            }
-        }
+        // else: 其他气泡在显示，等待对方自然消失
     }
 }

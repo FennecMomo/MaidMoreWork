@@ -1,7 +1,9 @@
 build/
 .gradle/
+bin/
 run/
 .idea/
+.eclipse/
 *.iml
 out/
 logs/
