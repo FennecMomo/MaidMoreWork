@@ -316,7 +316,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         silenceTicks = SILENCE_TICKS;
         String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
-        MaidBubbleHelper.showBubble(maid, "家园范围内没有可用的" + target);
+        MaidBubbleHelper.showBubble(maid, "家园范围内没有可用的" + target, 2 * 20);
         LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
                 SILENCE_TICKS, maid.getId());
     }

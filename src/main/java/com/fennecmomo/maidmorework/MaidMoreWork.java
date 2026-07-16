@@ -11,6 +11,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
+import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
@@ -70,6 +71,7 @@ public class MaidMoreWork
 
         NeoForge.EVENT_BUS.addListener(this::onEntityJoinLevel);
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
     }
 
     // 女仆加入世界时，从 Attachment 恢复 LOG_BLOCKS / LEAVES_BLOCKS 到 Memory
