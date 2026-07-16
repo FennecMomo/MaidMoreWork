@@ -111,6 +111,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         }
         if (isFollowModeBlocking(maid))
         {
+            clearTarget(maid);
             return false;
         }
         if (isTargetMemoryOccupied(maid))
@@ -144,7 +145,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
         // 静默倒计时中，跳过本 tick
-        if (tickSilence())
+        if (isInSilence())
         {
             return;
         }
@@ -155,11 +156,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // 螺旋队列为空时，在女仆当前位置重新初始化
-        ensureSpiralInitialized(maid);
-
-        // 批量处理螺旋点
-        boolean found = processSpiralBatch(level, maid);
+        // 螺旋搜索：初始化队列 + 批量处理螺旋点
+        boolean found = searchSpiralBatch(level, maid);
         if (found)
         {
             return;
@@ -214,31 +212,17 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // ===================== tick 子方法 =====================
 
-    // 静默倒计时 tick 处理，返回 true 表示仍在冷却中
-    private boolean tickSilence()
-    {
-        if (silenceTicks > 0)
-        {
-            silenceTicks--;
-            return true;
-        }
-        return false;
-    }
-
-    // 确保螺旋队列已初始化（首次或耗尽后重新初始化）
-    private void ensureSpiralInitialized(EntityMaid maid)
+    // 螺旋搜索：确保队列初始化 + 批量处理 SPIRAL_BATCH 个螺旋点
+    // 队列为空时以女仆当前位置初始化新的螺旋起点
+    // 每个点调用 scanAction.search()，找到目标立即返回 true
+    // 未命中的点向 26 方向扩展邻居入队，下个 tick 继续
+    private boolean searchSpiralBatch(ServerLevel level, EntityMaid maid)
     {
         if (spiralQueue == null)
         {
             initSpiral(maid.blockPosition());
         }
-    }
 
-    // 批量处理 SPIRAL_BATCH 个螺旋点
-    // 每个点调用 scanAction.search()，找到目标立即返回 true
-    // 未命中的点向 26 方向扩展邻居入队
-    private boolean processSpiralBatch(ServerLevel level, EntityMaid maid)
-    {
         for (int i = 0; i < SPIRAL_BATCH && !spiralQueue.isEmpty(); i++)
         {
             BlockPos point = spiralQueue.poll();
@@ -363,6 +347,16 @@ public class SearchBehavior extends Behavior<EntityMaid>
         int x = here.getX() + (int) Math.round(Math.cos(angle) * dist);
         int z = here.getZ() + (int) Math.round(Math.sin(angle) * dist);
         maid.getNavigation().moveTo(x, here.getY(), z, WALK_SPEED);
+    }
+
+    // ===================== 目标清理 =====================
+
+    // 清空搜索目标：只清除目标 Memory
+    // 女仆被判定无法行动时调用（如跟随模式），避免残留目标与后续搜索产生冲突
+    // 导航停止和螺旋状态重置由 canStillUse=false 触发的 stop() 自然完成
+    private void clearTarget(EntityMaid maid)
+    {
+        maid.getBrain().eraseMemory(targetMemory);
     }
 
     // ===================== 状态清理 =====================
