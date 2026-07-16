@@ -1,15 +1,22 @@
 package com.fennecmomo.maidmorework.search;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.fennecmomo.maidmorework.MaidBubbleHelper;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.*;
 
 // 通用螺旋搜索行为（伐木/挖矿共用）
 //
@@ -41,11 +48,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 速度倍率，TLM 的 MaidMoveControl 会乘以 MOVEMENT_SPEED 属性再 *3
     // 0.3 是 TLM 随机闲逛的倍率
     private static final double WALK_SPEED = 0.3;
-
-    // 气泡框冷却 key，防止反复刷屏
-    // 9527: 跟随模式提示，9528: 家园范围无资源提示
-    private static final long FOLLOW_WARN_KEY = 9527L;
-    private static final long NO_RESOURCE_KEY = 9528L;
 
     // 每 tick 处理的螺旋点数
     private static final int SPIRAL_BATCH = 100;
@@ -197,9 +199,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
-            String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("工作");
-            maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
-                    "跟随模式下无法" + action + "，请开启Home模式", FOLLOW_WARN_KEY);
+            MaidBubbleHelper.showFollowWarn(maid);
             silenceTicks = SILENCE_TICKS;
             return true;
         }
@@ -348,8 +348,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         silenceTicks = SILENCE_TICKS;
         String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
-        maid.getChatBubbleManager().addTextChatBubbleIfTimeout(
-                "家园范围内没有可用的" + target, NO_RESOURCE_KEY);
+        MaidBubbleHelper.showBubble(maid, "家园范围内没有可用的" + target);
         LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
                 SILENCE_TICKS, maid.getId());
     }
