@@ -1,4 +1,4 @@
-package com.fennecmomo.maidmorework.entity.ai;
+package com.fennecmomo.maidmorework.search;
 
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;

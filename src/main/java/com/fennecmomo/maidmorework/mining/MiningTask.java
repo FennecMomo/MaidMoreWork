@@ -2,7 +2,7 @@ package com.fennecmomo.maidmorework.mining;
 
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
-import com.fennecmomo.maidmorework.entity.ai.SearchBehavior;
+import com.fennecmomo.maidmorework.search.SearchBehavior;
 import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.mojang.datafixers.util.Pair;
