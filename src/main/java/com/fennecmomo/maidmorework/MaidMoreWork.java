@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework;
 
+import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.spblock.SPRegistration;
@@ -65,7 +66,7 @@ public class MaidMoreWork
         MineRegistration.BLOCKS.register(modBus);
         MineRegistration.BLOCK_ENTITIES.register(modBus);
         MineRegistration.ITEMS.register(modBus);
-        MineRegistration.DATA_COMPONENTS.register(modBus);
+        FluidBottleItem.DATA_COMPONENTS.register(modBus);
         MineRegistration.MENUS.register(modBus);
         CREATIVE_TABS.register(modBus);
 

@@ -1,12 +1,16 @@
 package com.fennecmomo.maidmorework.item;
 
-import com.fennecmomo.maidmorework.mining.MineRegistration;
+import com.fennecmomo.maidmorework.MaidMoreWork;
+import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.material.Fluid;
+import net.neoforged.neoforge.registries.DeferredHolder;
+import net.neoforged.neoforge.registries.DeferredRegister;
 
 // 液体瓶物品（动态名字）
 //
@@ -22,6 +26,19 @@ import net.minecraft.world.level.material.Fluid;
 // TODO: 后续做成能直接塞到容器（如流体储罐）里交互，右键取水/放水暂不实现
 public class FluidBottleItem extends Item
 {
+    // DataComponent 注册表
+    public static final DeferredRegister<DataComponentType<?>> DATA_COMPONENTS =
+            DeferredRegister.create(Registries.DATA_COMPONENT_TYPE, MaidMoreWork.MODID);
+
+    // DataComponent：液体瓶装的是哪种原版液体
+    // 使用 ResourceKey<Fluid> 存储液体标识，支持持久化和网络同步
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceKey<Fluid>>> FLUID_TYPE =
+            DATA_COMPONENTS.register("fluid_type",
+                    () -> DataComponentType.<ResourceKey<Fluid>>builder()
+                            .persistent(ResourceKey.codec(Registries.FLUID))
+                            .networkSynchronized(ResourceKey.streamCodec(Registries.FLUID))
+                            .build());
+
     public FluidBottleItem(Properties properties)
     {
         super(properties);
@@ -33,7 +50,7 @@ public class FluidBottleItem extends Item
     @Override
     public Component getName(ItemStack stack)
     {
-        ResourceKey<Fluid> key = stack.get(MineRegistration.FLUID_TYPE.get());
+        ResourceKey<Fluid> key = stack.get(FLUID_TYPE.get());
         if (key == null) return Component.literal("空瓶");
         Fluid fluid = BuiltInRegistries.FLUID.get(key)
                 .map(ref -> (Fluid) ref.value())
@@ -46,13 +63,13 @@ public class FluidBottleItem extends Item
     // MiningBehavior 中女仆装液体时调用
     public static void setFluid(ItemStack stack, ResourceKey<Fluid> key)
     {
-        stack.set(MineRegistration.FLUID_TYPE.get(), key);
+        stack.set(FLUID_TYPE.get(), key);
     }
 
     // 获取液体类型：从 DataComponent 读取
     // 返回 null 表示空瓶
     public static ResourceKey<Fluid> getFluid(ItemStack stack)
     {
-        return stack.get(MineRegistration.FLUID_TYPE.get());
+        return stack.get(FLUID_TYPE.get());
     }
 }

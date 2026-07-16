@@ -2,7 +2,6 @@ package com.fennecmomo.maidmorework.mining;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
-import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.BlockItem;
@@ -10,12 +9,11 @@ import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
-import net.minecraft.world.level.material.Fluid;
 import net.neoforged.neoforge.common.extensions.IMenuTypeExtension;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
-// 矿井相关注册中心：方块、方块实体、物品、数据组件、菜单
+// 矿井相关注册中心：方块、方块实体、物品、菜单
 // 所有注册项通过 DeferredRegister 延迟注册，在 NeoForge 的注册事件中统一提交
 //
 // 注册项列表：
@@ -24,7 +22,6 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 //   MINE_BLOCK_ENTITY — 矿井方块实体类型
 //   MINE_MARKER       — 矿井标记工具（不可堆叠）
 //   FLUID_BOTTLE      — 液体瓶（最多堆叠 16）
-//   FLUID_TYPE        — DataComponent：液体瓶装的是哪种原版液体
 //   MINE_STORAGE_MENU — 矿井方块储物容器 MenuType
 public class MineRegistration
 {
@@ -40,9 +37,6 @@ public class MineRegistration
     public static final DeferredRegister.Items ITEMS =
             DeferredRegister.createItems(MaidMoreWork.MODID);
 
-    // 数据组件注册表（DataComponentType 用于物品附加自定义数据）
-    public static final DeferredRegister<DataComponentType<?>> DATA_COMPONENTS =
-            DeferredRegister.create(Registries.DATA_COMPONENT_TYPE, MaidMoreWork.MODID);
 
     // 矿井方块（不可破坏、无碰撞、无掉落）
     // strength(-1.0F): 不可破坏，等同基岩
@@ -81,15 +75,6 @@ public class MineRegistration
                     id -> new FluidBottleItem(new Item.Properties()
                             .setId(ResourceKey.create(Registries.ITEM, id))
                             .stacksTo(16)));
-
-    // DataComponent：液体瓶装的是哪种原版液体
-    // 使用 ResourceKey<Fluid> 存储液体标识，支持持久化和网络同步
-    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceKey<Fluid>>> FLUID_TYPE =
-            DATA_COMPONENTS.register("fluid_type",
-                    () -> DataComponentType.<ResourceKey<Fluid>>builder()
-                            .persistent(ResourceKey.codec(Registries.FLUID))
-                            .networkSynchronized(ResourceKey.streamCodec(Registries.FLUID))
-                            .build());
 
     // 矿井方块储物容器 MenuType
     // 使用 IMenuTypeExtension.create 支持额外数据传递（RegistryFriendlyByteBuf）
