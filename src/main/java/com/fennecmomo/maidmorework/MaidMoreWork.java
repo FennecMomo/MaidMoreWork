@@ -3,7 +3,6 @@ package com.fennecmomo.maidmorework;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
-import com.fennecmomo.maidmorework.spblock.SPRegistration;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -23,7 +22,7 @@ import java.util.List;
 
 // maidmorework 模组主类（@Mod 入口）
 // 负责：
-// 1. 注册所有 DeferredRegister（Memory、Attachment、SPBlock、MineBlock、菜单、数据组件、创造模式标签）
+// 1. 注册所有 DeferredRegister（Memory、Attachment、MineBlock、菜单、数据组件、创造模式标签）
 // 2. 监听女仆加入世界事件，从 Attachment 恢复伐木/挖矿进度到 Memory
 // 3. 注册命令和事件监听
 @Mod(MaidMoreWork.MODID)
@@ -60,9 +59,6 @@ public class MaidMoreWork
     {
         ModMemories.MEMORY_MODULE_TYPES.register(modBus);
         ModAttachments.ATTACHMENT_TYPES.register(modBus);
-        SPRegistration.BLOCKS.register(modBus);
-        SPRegistration.BLOCK_ENTITIES.register(modBus);
-        SPRegistration.ITEMS.register(modBus);
         MineRegistration.BLOCKS.register(modBus);
         MineRegistration.BLOCK_ENTITIES.register(modBus);
         MineRegistration.ITEMS.register(modBus);

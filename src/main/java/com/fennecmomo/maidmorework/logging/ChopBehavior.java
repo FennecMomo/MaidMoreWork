@@ -2,44 +2,57 @@ package com.fennecmomo.maidmorework.logging;
 
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
-import com.fennecmomo.maidmorework.spblock.SPBlockEntity;
-import com.fennecmomo.maidmorework.spblock.SPBlockManager;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.item.ItemStacksResourceHandler;
 import net.neoforged.neoforge.transfer.transaction.Transaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
-// 伐木砍伐行为：导航到树脚 → 替换为 SPBlock → 逐个标记蓝图 → 收集掉落物
+// 伐木砍伐行为：导航到树脚 → 逐个验证并破坏原木 → 树叶自然凋落
 // 由 LoggingTask 组装到 Brain，与 SearchBehavior 配合工作
 // SearchBehavior 找到树 → BFS 整棵树 → 聚类 → 写 Memory → 本行为启动
+//
 // 整体流程：
 // 1. 导航到树脚附近（2格内）
-// 2. 到达后把所有原木和树叶替换为 SPBlock（不可破坏的代理方块）
-// 3. 逐个标记为蓝图状态（每 10 tick 标记一个）
-// 4. 全部标记后调用 finishTree：收集所有方块掉落物 + 清空 Memory
-// 5. 如果被打断，stop() 会把剩余 SPBlock 还原回原始方块
+// 2. 到达后逐个破坏原木（每 CHOP_INTERVAL tick 一个）
+// 3. 每次破坏前验证方块仍是原木，不是则重 BFS 更新列表
+// 4. 全部破坏后清理树叶 → 清空 Memory
+// 5. 如果被打断，stop() 只清空 Memory（无需还原方块）
+//
+// 设计依据：TreeChop 模组的懒 BFS 思路
+// 不锁定整棵树，每次砍前仅做单点验证，不匹配时才重 BFS 刷新列表
+// LOG_BLOCKS Memory 自身充当缓存，不再需要 SPBlock 代理方块体系
 public class ChopBehavior extends Behavior<EntityMaid>
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
-    private static final int CHOP_INTERVAL = 10;   // 标记一个方块为蓝图的 tick 间隔
-    private static final double WALK_REACH_SQ = 4.0; // 到达树脚的判定距离平方（2格）
-    private static final double WALK_SPEED = 0.6;    // 导航速度倍率
+    private static final int CHOP_INTERVAL = 10;    // 破坏一个方块的 tick 间隔
+    private static final double WALK_REACH_SQ = 4.0;  // 到达树脚的判定距离平方（2格）
+    private static final double WALK_SPEED = 0.6;     // 导航速度倍率
 
-    private int currentIndex = 0;     // 当前正在标记的原木索引
-    private int chopTimer = 0;       // 当前方块的砍伐计时
-    private boolean reachedTree = false; // 是否已到达树脚附近
+    private int currentIndex = 0;     // 当前正在破坏的原木索引
+    private int chopTimer = 0;        // 当前方块的砍伐计时
+    private boolean reachedTree = false;  // 是否已到达树脚附近
+    private boolean choppingLeaves = false; // 是否已进入树叶清理阶段
 
     // 构造：无内存需求，永不超时
     public ChopBehavior()
@@ -99,8 +112,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
     // ===================== 生命周期 =====================
 
-    // 行为启动：装备斧子、验证树脚方块有效性
-    // 如果是从 Attachment 恢复的，树脚可能已被替换为 SPBlock，这也算有效
+    // 行为启动：装备斧子、验证树脚方块是否仍为原木
+    // 从 Attachment 恢复的树脚可能已被破坏，需要重新验证
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
@@ -109,18 +122,16 @@ public class ChopBehavior extends Behavior<EntityMaid>
         currentIndex = 0;
         chopTimer = 0;
         reachedTree = false;
+        choppingLeaves = false;
 
-        // 持久化恢复后验证：检查树脚方块是否还是原木或已被替换为SPBlock
-        // SPBlock也是有效目标，不能因为已替换就清空数据
+        // 验证树脚方块是否仍为原木（从 Attachment 恢复时可能已被破坏）
         Optional<List<BlockPos>> blocksOpt = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
         if (blocksOpt.isPresent() && !blocksOpt.get().isEmpty())
         {
             BlockPos treeBase = findTreeBase(blocksOpt.get());
-            boolean stillValid = level.getBlockState(treeBase).is(net.minecraft.tags.BlockTags.LOGS)
-                    || level.getBlockState(treeBase).getBlock() instanceof com.fennecmomo.maidmorework.spblock.SPBlock;
-            if (!stillValid)
+            if (!level.getBlockState(treeBase).is(BlockTags.LOGS))
             {
-                LOGGER.info("ChopBehavior: persisted tree base {} is no longer a log or SPBlock, clearing memory", treeBase);
+                LOGGER.info("ChopBehavior: tree base {} is no longer a log, clearing memory", treeBase);
                 clearAllMemory(maid);
                 maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
                 maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
@@ -128,11 +139,12 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 每 tick 驱动：导航到树脚 → 替换 SPBlock → 逐个标记蓝图
+    // 每 tick 驱动：导航到树脚 → 逐个验证并破坏原木 → 破坏树叶
     // 流程：
-    // 1. 未到达树脚：导航到树脚附近，到达后替换所有原木+树叶为 SPBlock
-    // 2. 已到达树脚：逐个标记原木为蓝图（每 CHOP_INTERVAL 标记一个）
-    // 3. 全部标记完后调用 finishTree 收集掉落物
+    // 1. 未到达树脚：导航到树脚附近，到达后直接开始砍
+    // 2. 砍原木阶段：逐个验证当前方块仍是原木，是则破坏，不是则重 BFS
+    // 3. 原木砍完后切换 choppingLeaves=true，逐个破坏树叶
+    // 4. 全部砍完后调用 finishTree 清空 Memory
     @Override
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
@@ -146,92 +158,140 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         if (!reachedTree)
         {
-            BlockPos treeBase = findTreeBase(blocks);
-            double distSq = maid.distanceToSqr(
-                    treeBase.getX() + 0.5, treeBase.getY() + 0.5, treeBase.getZ() + 0.5);
+            tickNavigate(level, maid, blocks);
+            return;
+        }
 
-            if (distSq <= WALK_REACH_SQ)
+        if (!choppingLeaves)
+        {
+            tickChopLogs(level, maid, blocks);
+        }
+        else
+        {
+            tickChopLeaves(level, maid);
+        }
+    }
+
+    // ===================== 导航阶段 =====================
+
+    // 导航到树脚：已到达则标记 reachedTree，否则尝试移动
+    // 导航失败但距离够近（5格内）也直接开砍
+    private void tickNavigate(ServerLevel level, EntityMaid maid, List<BlockPos> blocks)
+    {
+        BlockPos treeBase = findTreeBase(blocks);
+        double distSq = maid.distanceToSqr(
+                treeBase.getX() + 0.5, treeBase.getY() + 0.5, treeBase.getZ() + 0.5);
+
+        if (distSq <= WALK_REACH_SQ)
+        {
+            reachedTree = true;
+            LOGGER.info("ChopBehavior: reached tree base, starting chop maid={}", maid.getId());
+            return;
+        }
+
+        if (!maid.getNavigation().isInProgress())
+        {
+            BlockPos walkTarget = findWalkTarget(level, treeBase);
+            if (maid.hasHome() && !maid.isWithinHome(walkTarget))
             {
-                reachedTree = true;
-                SPBlockManager.replaceBlocks(level, blocks, maid.getUUID());
-                LOGGER.info("ChopBehavior: reached tree base, replaced {} logs maid={}", blocks.size(), maid.getId());
-                Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
-                if (leavesOpt.isPresent() && !leavesOpt.get().isEmpty())
-                {
-                    SPBlockManager.replaceBlocks(level, leavesOpt.get(), maid.getUUID());
-                    LOGGER.info("ChopBehavior: replaced {} leaves maid={}", leavesOpt.get().size(), maid.getId());
-                }
+                LOGGER.info("ChopBehavior: walkTarget {} outside home, discarding tree maid={}",
+                        walkTarget, maid.getId());
+                clearAllMemory(maid);
+                maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
+                maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
+                return;
             }
-            else
+            boolean moved = maid.getNavigation().moveTo(
+                    walkTarget.getX() + 0.5, walkTarget.getY(),
+                    walkTarget.getZ() + 0.5, WALK_SPEED);
+            if (!moved)
             {
-                if (!maid.getNavigation().isInProgress())
+                if (distSq < 25.0)
                 {
-                    // 找树脚旁边可站立的位置，不往原木里面导航
-                    BlockPos walkTarget = findWalkTarget(level, treeBase);
-                    // 范围外不导航，防止被TLM拉回
-                    if (maid.hasHome() && !maid.isWithinHome(walkTarget))
-                    {
-                        LOGGER.info("ChopBehavior: walkTarget {} outside home, discarding tree maid={}",
-                                walkTarget, maid.getId());
-                        clearAllMemory(maid);
-                        maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
-                        maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
-                        return;
-                    }
-                    LOGGER.info("ChopBehavior navigating: treeBase={} walkTarget={} distSq={} maid={}",
-                            treeBase, walkTarget, String.format("%.1f", distSq), maid.getId());
-                    boolean moved = maid.getNavigation().moveTo(
-                            walkTarget.getX() + 0.5, walkTarget.getY(),
-                            walkTarget.getZ() + 0.5, WALK_SPEED);
-                    if (!moved)
-                    {
-                        LOGGER.warn("ChopBehavior moveTo FAILED: walkTarget={} maid={}", walkTarget, maid.getId());
-                        // 导航走不动但已经离树脚不到5格，直接开砍
-                        if (distSq < 25.0)
-                        {
-                            LOGGER.info("ChopBehavior: close enough despite nav failure, starting chop maid={}", maid.getId());
-                            reachedTree = true;
-                            SPBlockManager.replaceBlocks(level, blocks, maid.getUUID());
-                            Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
-                            if (leavesOpt.isPresent() && !leavesOpt.get().isEmpty())
-                            {
-                                SPBlockManager.replaceBlocks(level, leavesOpt.get(), maid.getUUID());
-                            }
-                        }
-                        else
-                        {
-                            // 离太远导航不到，放弃这棵重新搜索
-                            LOGGER.info("ChopBehavior: too far and nav failed, discarding tree maid={}", maid.getId());
-                            clearAllMemory(maid);
-                            maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
-                            maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
-                            return;
-                        }
-                    }
+                    LOGGER.info("ChopBehavior: close enough despite nav failure, starting chop maid={}", maid.getId());
+                    reachedTree = true;
                 }
                 else
                 {
-                    LOGGER.info("ChopBehavior nav in progress: distSq={} maidPos={} maid={}",
-                            String.format("%.1f", distSq), maid.blockPosition(), maid.getId());
+                    LOGGER.info("ChopBehavior: too far and nav failed, discarding tree maid={}", maid.getId());
+                    clearAllMemory(maid);
+                    maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
+                    maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
                 }
-                return;
             }
         }
+    }
 
+    // ===================== 砍原木阶段 =====================
+
+    // 逐个破坏原木：先验证仍为原木，否则重 BFS 刷新列表
+    // 全部砍完后标记 choppingLeaves=true，切换到树叶清理
+    private void tickChopLogs(ServerLevel level, EntityMaid maid, List<BlockPos> blocks)
+    {
         if (currentIndex >= blocks.size())
+        {
+            // 原木全部砍完，清理树叶
+            choppingLeaves = true;
+            currentIndex = 0;
+            chopTimer = 0;
+            LOGGER.info("ChopBehavior: all logs chopped, switching to leaves maid={}", maid.getId());
+            return;
+        }
+
+        BlockPos target = blocks.get(currentIndex);
+        BlockState state = level.getBlockState(target);
+
+        // 缓存失效检查：如果当前方块不再是原木，重 BFS 刷新整个列表
+        if (!state.is(BlockTags.LOGS))
+        {
+            LOGGER.info("ChopBehavior: block {} no longer a log, re-BFSing maid={}", target, maid.getId());
+            reBfsTree(level, maid, blocks);
+            return;
+        }
+
+        maid.getLookControl().setLookAt(
+                target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
+                30f, 30f);
+
+        chopTimer++;
+        maid.swing(maid.getUsedItemHand());
+
+        if (chopTimer >= CHOP_INTERVAL)
+        {
+            chopBlock(level, maid, target);
+            currentIndex++;
+            chopTimer = 0;
+            LOGGER.info("ChopBehavior: chopped log {} ({}/{}) maid={}",
+                    target, currentIndex, blocks.size(), maid.getId());
+        }
+    }
+
+    // ===================== 砍树叶阶段 =====================
+
+    // 逐个破坏树叶：同样先验证仍为树叶，否则跳过
+    // 全部砍完后调用 finishTree
+    private void tickChopLeaves(ServerLevel level, EntityMaid maid)
+    {
+        Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
+        if (leavesOpt.isEmpty() || leavesOpt.get().isEmpty())
+        {
+            finishTree(level, maid);
+            return;
+        }
+        List<BlockPos> leaves = leavesOpt.get();
+
+        if (currentIndex >= leaves.size())
         {
             finishTree(level, maid);
             return;
         }
 
-        BlockPos target = blocks.get(currentIndex);
+        BlockPos target = leaves.get(currentIndex);
+        BlockState state = level.getBlockState(target);
 
-        // 检查是否已经被标记过蓝图，是就直接跳过不等待
-        if (level.getBlockEntity(target) instanceof SPBlockEntity spbe
-                && spbe.getBlockState2() == SPBlockEntity.State.BLUEPRINT)
+        if (!state.is(BlockTags.LEAVES))
         {
-            LOGGER.info("ChopBehavior: skipping already blueprint {} ({}/{}) maid={}",
-                    target, currentIndex + 1, blocks.size(), maid.getId());
+            // 树叶已消失（自然凋落或被人破坏），跳过
             currentIndex++;
             chopTimer = 0;
             return;
@@ -246,92 +306,98 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         if (chopTimer >= CHOP_INTERVAL)
         {
-            SPBlockManager.markBlueprint(level, target);
+            chopBlock(level, maid, target);
             currentIndex++;
             chopTimer = 0;
-            LOGGER.info("ChopBehavior: marked blueprint {} ({}/{}) maid={}",
-                    target, currentIndex, blocks.size(), maid.getId());
+            LOGGER.info("ChopBehavior: chopped leaf {} ({}/{}) maid={}",
+                    target, currentIndex, leaves.size(), maid.getId());
         }
+    }
+
+    // ===================== 破坏方块 =====================
+
+    // 破坏单个方块并收集掉落物到女仆背包
+    // 先从 TLM 的 dropResourcesToMaidInv 收集，再用 destroyBlock 移除方块
+    private void chopBlock(ServerLevel level, EntityMaid maid, BlockPos pos)
+    {
+        BlockState state = level.getBlockState(pos);
+        // 收集掉落物：TLM 内置方法从 BlockState 计算掉落物并塞入女仆背包
+        maid.getItemManager().dropResourcesToMaidInv(
+                state, level, pos,
+                level.getBlockEntity(pos), maid.getMainHandItem());
+        // 移除方块（不掉落，因为已手动收集）
+        level.destroyBlock(pos, false, maid);
+    }
+
+    // ===================== 重 BFS =====================
+
+    // 缓存失效时重 BFS 整棵树：从 Memory 中剩余已知原木位置出发
+    // BFS 找到当前仍连通的整棵树，更新 LOG_BLOCKS + LEAVES_BLOCKS + Attachment
+    // 如果已无任何有效原木位置，清空 Memory 结束砍伐
+    private void reBfsTree(ServerLevel level, EntityMaid maid, List<BlockPos> oldBlocks)
+    {
+        // 从剩余原木中找一个仍有效的起点
+        BlockPos start = null;
+        for (int i = currentIndex + 1; i < oldBlocks.size(); i++)
+        {
+            if (level.getBlockState(oldBlocks.get(i)).is(BlockTags.LOGS))
+            {
+                start = oldBlocks.get(i);
+                break;
+            }
+        }
+        if (start == null)
+        {
+            LOGGER.info("ChopBehavior: no valid log remaining after re-BFS, finishing maid={}", maid.getId());
+            finishTree(level, maid);
+            return;
+        }
+
+        // BFS 重新扫描连通树
+        List<BlockPos> newLogs = new ArrayList<>();
+        List<BlockPos> newLeaves = new ArrayList<>();
+        bfsAll(level, start, newLogs, newLeaves);
+
+        LOGGER.info("ChopBehavior: re-BFS found {} logs, {} leaves maid={}",
+                newLogs.size(), newLeaves.size(), maid.getId());
+
+        // 更新 Memory + Attachment
+        maid.getBrain().setMemory(ModMemories.LOG_BLOCKS.get(), newLogs);
+        maid.getBrain().setMemory(ModMemories.LEAVES_BLOCKS.get(), newLeaves);
+        maid.setData(ModAttachments.LOG_BLOCKS_SAVED, new ArrayList<>(newLogs));
+        maid.setData(ModAttachments.LEAVES_BLOCKS_SAVED, new ArrayList<>(newLeaves));
+
+        // 重置索引，从头开始砍新的列表
+        currentIndex = 0;
+        chopTimer = 0;
     }
 
     // ===================== 完成与停止 =====================
 
-    // 砍伐完成：标记树叶蓝图 → 收集所有方块掉落物 → 清空 Memory + Attachment
-    // 先标记树叶为蓝图，再逐个收集原木和树叶的掉落物
-    // 最后清空所有伐木相关 Memory 和 Attachment
+    // 砍伐完成：清空所有伐木相关 Memory + Attachment
+    // 方块已在 tick 中逐个破坏并收集掉落物，此处只需清理状态
     private void finishTree(ServerLevel level, EntityMaid maid)
     {
-        Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
-        if (leavesOpt.isPresent() && !leavesOpt.get().isEmpty())
-        {
-            for (BlockPos leafPos : leavesOpt.get())
-            {
-                SPBlockManager.markBlueprint(level, leafPos);
-            }
-        }
-
-        Optional<List<BlockPos>> blocksOpt = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
-        if (blocksOpt.isPresent())
-        {
-            for (BlockPos pos : blocksOpt.get())
-            {
-                SPBlockManager.collectBlock(level, pos, maid);
-            }
-        }
-        if (leavesOpt.isPresent())
-        {
-            for (BlockPos leafPos : leavesOpt.get())
-            {
-                SPBlockManager.collectBlock(level, leafPos, maid);
-            }
-            maid.getBrain().eraseMemory(ModMemories.LEAVES_BLOCKS.get());
-        }
-
         clearAllMemory(maid);
-        // 砍完清 Attachment
         maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
         maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
-        LOGGER.info("ChopBehavior: tree finished, all blocks collected maid={}", maid.getId());
+        LOGGER.info("ChopBehavior: tree finished maid={}", maid.getId());
     }
 
-    // 行为停止（被打断）：还原剩余 SPBlock → 清空 Memory + Attachment
-    // 只还原还未被标记蓝图的方块（currentIndex 之后的原木 + 所有树叶）
-    // SPBlock 还原回原始方块后清除 Attachment（不需要再次恢复了）
+    // 行为停止（被打断）：清空 Memory + Attachment，无需还原方块
+    // 已破坏的方块自然消失，未破坏的保持原样
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
-        List<BlockPos> remaining = new ArrayList<>();
-
-        Optional<List<BlockPos>> blocksOpt = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
-        if (blocksOpt.isPresent())
-        {
-            List<BlockPos> blocks = blocksOpt.get();
-            for (int i = currentIndex; i < blocks.size(); i++)
-            {
-                remaining.add(blocks.get(i));
-            }
-        }
-
-        Optional<List<BlockPos>> leavesOpt = maid.getBrain().getMemory(ModMemories.LEAVES_BLOCKS.get());
-        if (leavesOpt.isPresent())
-        {
-            remaining.addAll(leavesOpt.get());
-        }
-
-        if (!remaining.isEmpty())
-        {
-            SPBlockManager.restoreAll(level, remaining);
-            LOGGER.info("ChopBehavior: interrupted, restored {} SPBlocks maid={}", remaining.size(), maid.getId());
-        }
-
         clearAllMemory(maid);
-        // 中断也清 Attachment（SPBlock 已还原回原始方块，不需要恢复了）
         maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
         maid.removeData(ModAttachments.LEAVES_BLOCKS_SAVED);
         maid.getNavigation().stop();
         currentIndex = 0;
         chopTimer = 0;
         reachedTree = false;
+        choppingLeaves = false;
+        LOGGER.info("ChopBehavior: interrupted maid={}", maid.getId());
     }
 
     // ===================== 辅助方法 =====================
@@ -432,5 +498,37 @@ public class ChopBehavior extends Behavior<EntityMaid>
         maid.getBrain().eraseMemory(ModMemories.LEAVES_BLOCKS.get());
         maid.getBrain().eraseMemory(ModMemories.SCAFFOLDING_BLOCKS.get());
         // 关键词不清，切任务前一直保留
+    }
+
+    // BFS 搜索整棵连通树（原木+树叶）
+    // 从单点出发，向 6 方向扩展，把连通的原木和树叶都收集起来
+    // 用于缓存失效后重新扫描当前树结构
+    static void bfsAll(ServerLevel level, BlockPos start, List<BlockPos> logs, List<BlockPos> leaves)
+    {
+        Set<BlockPos> visited = new HashSet<>();
+        Deque<BlockPos> queue = new ArrayDeque<>();
+        queue.add(start);
+        visited.add(start);
+        while (!queue.isEmpty())
+        {
+            BlockPos p = queue.poll();
+            BlockState state = level.getBlockState(p);
+            if (state.is(BlockTags.LOGS)) { logs.add(p); }
+            else if (state.is(BlockTags.LEAVES)) { leaves.add(p); }
+            else { continue; }
+            for (Direction d : Direction.values())
+            {
+                BlockPos nb = p.relative(d);
+                if (!visited.contains(nb))
+                {
+                    BlockState ns = level.getBlockState(nb);
+                    if (ns.is(BlockTags.LOGS) || ns.is(BlockTags.LEAVES))
+                    {
+                        visited.add(nb);
+                        queue.add(nb);
+                    }
+                }
+            }
+        }
     }
 }
