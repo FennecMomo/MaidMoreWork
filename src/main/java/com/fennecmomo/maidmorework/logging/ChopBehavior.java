@@ -224,8 +224,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
     // ===================== 砍原木阶段 =====================
 
-    // 逐个破坏原木：砍到时才验证是否为原木，不是则重 BFS 刷新列表
-    // 不做事前预检查——信任缓存，仅在破坏失败时（检测到空洞）触发重扫
+    // 逐个破坏原木：砍前单点验证 + 砍后遍历剩余列表查空洞
+    // 砍后遍历保证外部破坏能实时反映到进度上（如第7块被刨，立刻重BFS）
     // 全部砍完后标记 choppingLeaves=true，切换到树叶清理
     private void tickChopLogs(ServerLevel level, EntityMaid maid, List<BlockPos> blocks)
     {
@@ -241,6 +241,14 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         BlockPos target = blocks.get(currentIndex);
 
+        // 砍前单点验证：当前目标已不是原木 → 缓存失效
+        if (!level.getBlockState(target).is(BlockTags.LOGS))
+        {
+            LOGGER.info("ChopBehavior: cache stale at {}, re-BFSing maid={}", target, maid.getId());
+            reBfsTree(level, maid, blocks);
+            return;
+        }
+
         maid.getLookControl().setLookAt(
                 target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                 30f, 30f);
@@ -250,23 +258,24 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         if (chopTimer >= CHOP_INTERVAL)
         {
-            // 砍到时才验证：方块已不是原木 → 缓存失效 → 重 BFS
-            if (!chopBlock(level, maid, target))
-            {
-                LOGGER.info("ChopBehavior: block {} no longer choppable, re-BFSing maid={}", target, maid.getId());
-                reBfsTree(level, maid, blocks);
-                return;
-            }
+            chopBlock(level, maid, target);
             currentIndex++;
             chopTimer = 0;
             LOGGER.info("ChopBehavior: chopped log {} ({}/{}) maid={}",
                     target, currentIndex, blocks.size(), maid.getId());
+
+            // 砍后遍历剩余列表：有空洞则重 BFS 刷新进度
+            if (isCacheStale(level, blocks))
+            {
+                LOGGER.info("ChopBehavior: cache gap detected after chop, re-BFSing maid={}", maid.getId());
+                reBfsTree(level, maid, blocks);
+            }
         }
     }
 
     // ===================== 砍树叶阶段 =====================
 
-    // 逐个破坏树叶：砍到时验证是否为树叶，不是则跳过（自然凋落/被破坏）
+    // 逐个破坏树叶：砍前验证是否为树叶，已消失则跳过（自然凋落/被破坏）
     // 树叶消失是正常现象，不需要重 BFS
     // 全部砍完后调用 finishTree
     private void tickChopLeaves(ServerLevel level, EntityMaid maid)
@@ -287,6 +296,14 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         BlockPos target = leaves.get(currentIndex);
 
+        // 树叶已消失（自然凋落或被人破坏），跳过
+        if (!level.getBlockState(target).is(BlockTags.LEAVES))
+        {
+            currentIndex++;
+            chopTimer = 0;
+            return;
+        }
+
         maid.getLookControl().setLookAt(
                 target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                 30f, 30f);
@@ -296,13 +313,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         if (chopTimer >= CHOP_INTERVAL)
         {
-            // 树叶已消失（自然凋落或被人破坏）→ 跳过，不需要重 BFS
-            if (!chopBlock(level, maid, target))
-            {
-                currentIndex++;
-                chopTimer = 0;
-                return;
-            }
+            chopBlock(level, maid, target);
             currentIndex++;
             chopTimer = 0;
             LOGGER.info("ChopBehavior: chopped leaf {} ({}/{}) maid={}",
@@ -313,23 +324,32 @@ public class ChopBehavior extends Behavior<EntityMaid>
     // ===================== 破坏方块 =====================
 
     // 破坏单个方块并收集掉落物到女仆背包
-    // 先从 TLM 的 dropResourcesToMaidInv 收集，再用 destroyBlock 移除方块
-    // 返回 false 表示目标不可砍（已被外部替换为非原木），调用方应触发重 BFS
-    private boolean chopBlock(ServerLevel level, EntityMaid maid, BlockPos pos)
+    // 调用方已确保目标为可砍方块（LOGS 或 LEAVES），此处直接执行
+    private void chopBlock(ServerLevel level, EntityMaid maid, BlockPos pos)
     {
         BlockState state = level.getBlockState(pos);
-        // 破坏前验证：防止砍到被外部替换的非原木方块
-        if (!state.is(BlockTags.LOGS) && !state.is(BlockTags.LEAVES))
-        {
-            return false;
-        }
         // 收集掉落物：TLM 内置方法从 BlockState 计算掉落物并塞入女仆背包
         maid.getItemManager().dropResourcesToMaidInv(
                 state, level, pos,
                 level.getBlockEntity(pos), maid.getMainHandItem());
         // 移除方块（不掉落，因为已手动收集）
         level.destroyBlock(pos, false, maid);
-        return true;
+    }
+
+    // ===================== 缓存验证 =====================
+
+    // 遍历剩余原木列表（从 currentIndex 开始），检查是否有方块已不是原木
+    // 返回 true 表示存在空洞，需要重 BFS 刷新进度
+    private boolean isCacheStale(ServerLevel level, List<BlockPos> blocks)
+    {
+        for (int i = currentIndex; i < blocks.size(); i++)
+        {
+            if (!level.getBlockState(blocks.get(i)).is(BlockTags.LOGS))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ===================== 重 BFS =====================
