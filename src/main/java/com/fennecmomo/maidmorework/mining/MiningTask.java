@@ -6,7 +6,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.search.SearchBehavior;
 import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
@@ -66,9 +65,6 @@ public class MiningTask implements IMaidTask
         // 写入工作关键词，供 SearchBehavior 拼气泡文案（如 "家园范围内没有可用的矿井"）
         maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), "挖矿");
         maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), "矿井");
-        // 同步写 Attachment，退出重进后恢复（Memory 不序列化，Attachment 序列化）
-        maid.setData(ModAttachments.WORK_ACTION_SAVED, "挖矿");
-        maid.setData(ModAttachments.WORK_TARGET_SAVED, "矿井");
 
         List<Pair<Integer, BehaviorControl<? super EntityMaid>>> tasks = new ArrayList<>();
         // SearchBehavior 负责螺旋遍历坐标，找到矿井方块后停止
@@ -94,7 +90,6 @@ public class MiningTask implements IMaidTask
             // 写入目标 Memory，SearchBehavior 检测到后停止
             // TODO: 后续换为挖矿专用 Memory
             maid.getBrain().setMemory(ModMemories.LOG_BLOCKS.get(), List.of(point));
-            maid.setData(ModAttachments.LOG_BLOCKS_SAVED, new ArrayList<>(List.of(point)));
             return true;
         }
         return false;

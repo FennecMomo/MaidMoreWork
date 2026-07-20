@@ -1,13 +1,14 @@
 package com.fennecmomo.maidmorework;
 
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
-
-import java.util.List;
-import java.util.Optional;
 
 // 自定义 Memory 类型注册（伐木/挖矿行为共用）
 // Memory 是运行时数据，不序列化（不存盘），只在行为执行期间使用
@@ -15,6 +16,15 @@ import java.util.Optional;
 // 通过 LoggingExtraBrain/MiningExtraBrain 注册到 TLM Brain
 public class ModMemories
 {
+    // ===================== 工作关键词常量 =====================
+
+    // 伐木工作关键词（写入 WORK_ACTION Memory，供气泡文案和 isActive 判定）
+    public static final String WORK_ACTION_CHOPPING = "砍树";
+
+    // 伐木工作目标描述（写入 WORK_TARGET Memory，供气泡文案）
+    public static final String WORK_TARGET_LOG = "原木";
+
+    // ===================== Memory 类型注册 =====================
     // Memory 类型延迟注册表
     public static final DeferredRegister<MemoryModuleType<?>> MEMORY_MODULE_TYPES =
             DeferredRegister.create(Registries.MEMORY_MODULE_TYPE, MaidMoreWork.MODID);
@@ -57,4 +67,10 @@ public class ModMemories
     // 供 SearchBehavior 拼气泡文案：“家园范围内没有可用的原木”
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<String>> WORK_TARGET =
             MEMORY_MODULE_TYPES.register("work_target", () -> new MemoryModuleType<>(Optional.empty()));
+
+    // 当前工作工程 UUID（关联到 ProjectManager 中的工程实例）
+    // SearchBehavior 找到目标后创建工程并写入，ChopBehavior 通过此 UUID 获取工程
+    // 为空时女仆没有活跃工程，有值时说明正在参与某个工程
+    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<UUID>> PROJECT_UUID =
+            MEMORY_MODULE_TYPES.register("project_uuid", () -> new MemoryModuleType<>(Optional.empty()));
 }

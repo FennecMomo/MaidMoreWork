@@ -599,7 +599,6 @@ public class MineBlockEntity extends BlockEntity implements Container
                 }
                 // 清除女仆挖矿记忆，让 MiningBehavior 自然停止
                 maid.getBrain().eraseMemory(com.fennecmomo.maidmorework.ModMemories.LOG_BLOCKS.get());
-                maid.removeData(com.fennecmomo.maidmorework.ModAttachments.LOG_BLOCKS_SAVED);
             }
         }
         maidIdMosts.clear();

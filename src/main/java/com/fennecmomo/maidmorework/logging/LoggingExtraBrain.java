@@ -20,6 +20,7 @@ import java.util.List;
 //   LOG_INITIALIZED  — 是否已初始化砍树数据
 //   WORK_ACTION      — 工作动作名称（显示在气泡框中）
 //   WORK_TARGET      — 工作目标名称（显示在气泡框中）
+//   PROJECT_UUID     — 当前工作工程 UUID（关联 ProjectManager）
 public class LoggingExtraBrain implements IExtraMaidBrain
 {
     // 返回伐木相关的 Memory 类型列表
@@ -35,7 +36,8 @@ public class LoggingExtraBrain implements IExtraMaidBrain
                 ModMemories.CHOP_TIMER.get(),
                 ModMemories.LOG_INITIALIZED.get(),
                 ModMemories.WORK_ACTION.get(),
-                ModMemories.WORK_TARGET.get()
+                ModMemories.WORK_TARGET.get(),
+                ModMemories.PROJECT_UUID.get()
         );
     }
 }

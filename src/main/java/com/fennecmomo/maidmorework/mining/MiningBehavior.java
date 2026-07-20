@@ -1,6 +1,5 @@
 package com.fennecmomo.maidmorework.mining;
 
-import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
@@ -87,19 +86,7 @@ public class MiningBehavior extends Behavior<EntityMaid>
         Optional<List<BlockPos>> blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
         if (blocks.isEmpty() || blocks.get().isEmpty())
         {
-            List<BlockPos> saved = maid.getData(ModAttachments.LOG_BLOCKS_SAVED);
-            if (saved != null && !saved.isEmpty())
-            {
-                LOGGER.info("MiningBehavior: restored {} targets from attachment maid={}", saved.size(), maid.getId());
-                maid.getBrain().setMemory(ModMemories.LOG_BLOCKS.get(), new ArrayList<>(saved));
-                String savedAction = maid.getData(ModAttachments.WORK_ACTION_SAVED);
-                if (savedAction != null && !savedAction.isEmpty())
-                    maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), savedAction);
-                String savedTarget = maid.getData(ModAttachments.WORK_TARGET_SAVED);
-                if (savedTarget != null && !savedTarget.isEmpty())
-                    maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), savedTarget);
-                blocks = maid.getBrain().getMemory(ModMemories.LOG_BLOCKS.get());
-            }
+            return false;
         }
         return blocks.isPresent() && !blocks.get().isEmpty();
     }
@@ -1026,7 +1013,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
     private void clearAll(EntityMaid maid)
     {
         maid.getBrain().eraseMemory(ModMemories.LOG_BLOCKS.get());
-        maid.removeData(ModAttachments.LOG_BLOCKS_SAVED);
         mineTimer = 0;
         reachedTarget = false;
         navFailCount = 0;

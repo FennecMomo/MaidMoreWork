@@ -59,12 +59,17 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // ===================== 配置字段 =====================
 
-    private final ISearchAction scanAction;       // 单点检索回调，外部传入
+    private final ISearchAction scanAction;       // 单点检索回调，判断当前点是否为目标
+    private final ISearchAction preSearch;        // 前置检索：搜索前尝试查找孤儿工程（可为 null）
+    private final ISearchAction onFound;          // 找到目标后的回调（可为 null）
     private final MemoryModuleType<?> targetMemory; // 目标 Memory，为空时搜索，有值时结束
     private final int scanHalfXZ;                  // 非家园模式 XZ 半径
     private final int scanYDown;                   // 非家园模式 Y 向下范围
     private final int scanYUp;                     // 非家园模式 Y 向上范围
     private final boolean useHomeRestriction;      // 是否受家园范围限制
+
+    // 最近找到的坐标点（scanAction 返回 true 时记录，供 onFound 回调使用）
+    private BlockPos lastFoundPoint = null;
 
     // ===================== 运行时状态 =====================
 
@@ -79,15 +84,34 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // ===================== 构造器 =====================
 
-    // scanAction: 单点检索方法，找到目标后写 Memory 并返回 true
+    // scanAction: 单点检索方法，判断当前点是否为目标，返回 true/false
     // targetMemory: 目标 Memory，为空时搜索行为可启动，有值时搜索行为结束
     // scanHalfXZ/scanYDown/scanYUp: 螺旋搜索范围（以女仆位置为原点，非家园限制时使用）
     // useHomeRestriction: 是否受家园范围限制，默认true
     public SearchBehavior(ISearchAction scanAction, MemoryModuleType<?> targetMemory,
                           int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
     {
+        this(scanAction, null, null, targetMemory, scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
+    }
+
+    // 带前置检索的构造器：preSearch 在螺旋搜索前执行，用于优先接取孤儿工程
+    public SearchBehavior(ISearchAction scanAction, ISearchAction preSearch,
+                          MemoryModuleType<?> targetMemory,
+                          int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
+    {
+        this(scanAction, preSearch, null, targetMemory, scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
+    }
+
+    // 完整构造器：支持 preSearch + onFound 回调
+    // onFound: 找到目标后在 tick 中调用，负责 BFS、工程创建、Memory 写入等后续操作
+    public SearchBehavior(ISearchAction scanAction, ISearchAction preSearch, ISearchAction onFound,
+                          MemoryModuleType<?> targetMemory,
+                          int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
+    {
         super(Map.of(), Integer.MAX_VALUE);
         this.scanAction = scanAction;
+        this.preSearch = preSearch;
+        this.onFound = onFound;
         this.targetMemory = targetMemory;
         this.scanHalfXZ = scanHalfXZ;
         this.scanYDown = scanYDown;
@@ -130,12 +154,20 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // ===================== 生命周期 =====================
 
-    // 行为启动：重置静默计时、以女仆当前位置初始化螺旋原点
+    // 行为启动：重置静默计时、尝试前置检索、初始化螺旋原点
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
         LOGGER.info("SearchBehavior START maid={}", maid.getId());
         silenceTicks = 0;
+
+        // 前置检索：优先查找孤儿工程（如无人接手的砍树工程）
+        if (preSearch != null && preSearch.search(level, maid.blockPosition(), maid))
+        {
+            LOGGER.info("SearchBehavior: preSearch found orphan project maid={}", maid.getId());
+            return;
+        }
+
         initSpiral(maid.blockPosition());
     }
 
@@ -159,6 +191,12 @@ public class SearchBehavior extends Behavior<EntityMaid>
         boolean found = searchSpiralBatch(level, maid);
         if (found)
         {
+            // 找到目标后调用 onFound 回调（负责 BFS、工程创建、Memory 写入等）
+            if (onFound != null && lastFoundPoint != null)
+            {
+                onFound.search(level, lastFoundPoint, maid);
+                lastFoundPoint = null;
+            }
             return;
         }
 
@@ -227,6 +265,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
             BlockPos point = spiralQueue.poll();
             if (scanAction.search(level, point, maid))
             {
+                lastFoundPoint = point;
                 LOGGER.info("SearchBehavior: found target at {} maid={}", point, maid.getId());
                 return true;
             }
