@@ -1,0 +1,9 @@
+{
+    // 禁止 Java 保存时自动格式化（防止 Eclipse 格式化器覆盖 Allman 风格）
+    "editor.formatOnSave": false,
+    "[java]": {
+        "editor.formatOnSave": false,
+        "editor.formatOnPaste": false,
+        "editor.formatOnType": false
+    }
+}

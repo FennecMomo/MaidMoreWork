@@ -45,7 +45,7 @@ neoForge {
 
 dependencies {
     implementation files('../libs/touhoulittlemaid-2.0.0-neoforge+mc26.1.2-snapshot.jar')
-    implementation files('../momolib/build/libs/FM_momolib-0.0.1.jar')
+    implementation files('../momolib/build/libs/momolib-0.0.1.jar')
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {

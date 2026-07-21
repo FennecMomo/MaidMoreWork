@@ -94,6 +94,7 @@ public abstract class CountingProject extends ProjectBase
 
         if (targetBlocks.isEmpty())
         {
+            LOGGER.info("CountingProject: targetBlocks empty, marking complete project={}", getId());
             completed = true;
             return false;
         }
@@ -101,6 +102,7 @@ public abstract class CountingProject extends ProjectBase
         Entity entity = level.getEntity(maidUuid);
         if (!(entity instanceof EntityMaid maid))
         {
+            LOGGER.info("CountingProject: maid not found for uuid={}, project={}", maidUuid, getId());
             return false;
         }
 
@@ -111,8 +113,12 @@ public abstract class CountingProject extends ProjectBase
         progress += progressInc;
         addContribution(maidUuid, contribInc);
 
+        LOGGER.info("CountingProject: execute progress={}/{} contrib={} maid={} project={}",
+                progress, workload, contribInc, maidUuid, getId());
+
         if (progress >= workload)
         {
+            LOGGER.info("CountingProject: progress reached workload, triggering completion project={}", getId());
             completeTargets(level);
             return false;
         }

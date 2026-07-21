@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fennecmomo.maidmorework.MaidBubbleHelper;
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.ChoppingProject;
@@ -19,6 +20,7 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.item.ItemStacksResourceHandler;
 import net.neoforged.neoforge.transfer.transaction.Transaction;
@@ -47,6 +49,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
     private int chopTimer = 0;        // 当前砍伐计时
     private boolean reachedTree = false;  // 是否已到达树脚附近
+    private boolean roaming = false;      // 导航失败后正在游荡，stop 时不打断导航
 
     // 构造：无内存需求，永不超时
     public ChopBehavior()
@@ -64,10 +67,17 @@ public class ChopBehavior extends Behavior<EntityMaid>
     }
 
     // 持续条件：Memory 或 Attachment 中有可用的未完成工程
-    // Memory 丢失时自动从 Attachment 恢复引用
+    // 跟随模式下直接拒绝（女仆被收起/重置后不应继续砍树）
     @Override
     protected boolean canStillUse(ServerLevel level, EntityMaid maid, long time)
     {
+        if (!maid.isHomeModeEnable() && maid.canBrainMoving())
+        {
+            clearAllMemory(maid);
+            maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
+            return false;
+        }
+
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         if (ProjectManager.getAvailableProject(projectUuid, ChoppingProject.class) != null)
         {
@@ -81,10 +91,17 @@ public class ChopBehavior extends Behavior<EntityMaid>
             ChoppingProject project = ProjectManager.getAvailableProject(savedUuid.get(), ChoppingProject.class);
             if (project != null)
             {
+                LOGGER.info("ChopBehavior: restored memory from attachment, project={} maid={}",
+                        savedUuid.get(), maid.getId());
                 maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), savedUuid.get());
                 maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
                 maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
                 return true;
+            }
+            else
+            {
+                LOGGER.info("ChopBehavior: attachment project {} no longer available, maid={}",
+                        savedUuid.get(), maid.getId());
             }
         }
         return false;
@@ -96,9 +113,31 @@ public class ChopBehavior extends Behavior<EntityMaid>
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
         LOGGER.info("ChopBehavior START maid={}", maid.getId());
+        MaidBubbleHelper.clearBubble(maid);
+        if (maid.getNavigation().isInProgress())
+        {
+            LOGGER.info("ChopBehavior: navigation still in progress on start, stopping maid={}", maid.getId());
+        }
+        maid.getNavigation().stop();
         equipAxe(maid);
         chopTimer = 0;
         reachedTree = false;
+
+        // 诊断日志：输出树数据和导航目标
+        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
+        if (projectUuid != null)
+        {
+            ChoppingProject project = ProjectManager.getProject(projectUuid, ChoppingProject.class);
+            if (project != null)
+            {
+                BlockPos treeBase = project.getPosition();
+        int groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, treeBase.getX(), treeBase.getZ());
+                BlockPos maidPos = maid.blockPosition();
+                LOGGER.info("ChopBehavior: TREE_DIAG project={} logs={} treeBase={} groundY={} maidPos={} navTarget=({},{},{})",
+                        project.getId(), project.getTargetBlocks(), treeBase, groundY, maidPos,
+                        treeBase.getX(), groundY, treeBase.getZ());
+            }
+        }
     }
 
     // 每 tick 驱动：导航到树脚 → 委托工程砍原木
@@ -108,6 +147,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         if (projectUuid == null)
         {
+            LOGGER.info("ChopBehavior: PROJECT_UUID memory lost, stopping maid={}", maid.getId());
             stopChop(maid);
             return;
         }
@@ -131,16 +171,18 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
     // ===================== 导航阶段 =====================
 
-    // 导航到树脚附近，使用原生导航系统自动寻路
+    // 导航到树脚旁边
     private void tickNavigate(ServerLevel level, EntityMaid maid, ChoppingProject project)
     {
         BlockPos treeBase = project.getPosition();
         double distSq = maid.distanceToSqr(
-                treeBase.getX() + 0.5, treeBase.getY() + 0.5, treeBase.getZ() + 0.5);
+                treeBase.getX() + 0.5, treeBase.getY(), treeBase.getZ() + 0.5);
 
         if (distSq <= WALK_REACH_SQ)
         {
             reachedTree = true;
+            maid.getNavigation().stop();
+            MaidBubbleHelper.clearBubble(maid);
             LOGGER.info("ChopBehavior: reached tree base, starting chop maid={}", maid.getId());
             return;
         }
@@ -150,7 +192,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
             boolean moved = maid.getNavigation().moveTo(
                     treeBase.getX() + 0.5, treeBase.getY(),
                     treeBase.getZ() + 0.5, WALK_SPEED);
-            if (!moved)
+            if (moved)
+            {
+                MaidBubbleHelper.clearBubble(maid);
+            }
+            else
             {
                 if (distSq < 25.0)
                 {
@@ -159,10 +205,18 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 }
                 else
                 {
-                    LOGGER.info("ChopBehavior: too far and nav failed, discarding maid={}", maid.getId());
+                    LOGGER.info("ChopBehavior: too far and nav failed, roaming away maid={}", maid.getId());
+                    ProjectManager.remove(project.getId());
+                    roaming = true;
+                    pickRandomAndMove(maid, level);
                     stopChop(maid);
                 }
             }
+        }
+        else
+        {
+            LOGGER.info("ChopBehavior: waiting for other navigation to finish, dist={} maid={}",
+                    Math.sqrt(distSq), maid.getId());
         }
     }
 
@@ -176,6 +230,17 @@ public class ChopBehavior extends Behavior<EntityMaid>
         if (project.isCompleted())
         {
             stopChop(maid);
+            return;
+        }
+
+        // 距离过远：被拾取等行为拉走，回退到导航阶段
+        BlockPos treeBase = project.getPosition();
+        double distSq = maid.distanceToSqr(
+                treeBase.getX() + 0.5, treeBase.getY(), treeBase.getZ() + 0.5);
+        if (distSq > WALK_REACH_SQ * 4)
+        {
+            LOGGER.info("ChopBehavior: drifted too far during chop, re-navigating maid={}", maid.getId());
+            reachedTree = false;
             return;
         }
 
@@ -221,7 +286,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
     {
         clearAllMemory(maid);
         maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
-        maid.getNavigation().stop();
+        if (!roaming)
+        {
+            maid.getNavigation().stop();
+        }
+        roaming = false;
         chopTimer = 0;
         reachedTree = false;
         LOGGER.info("ChopBehavior: interrupted maid={}", maid.getId());
@@ -250,9 +319,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
                     tx.commit();
                 }
                 maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(res.getItem(), 1));
+                LOGGER.info("ChopBehavior: equipped axe maid={}", maid.getId());
                 return;
             }
         }
+        LOGGER.info("ChopBehavior: no axe found in inventory maid={}", maid.getId());
     }
 
     // 清空所有伐木相关 Memory
@@ -265,5 +336,18 @@ public class ChopBehavior extends Behavior<EntityMaid>
         maid.getBrain().eraseMemory(ModMemories.LOG_INITIALIZED.get());
         maid.getBrain().eraseMemory(ModMemories.SCAFFOLDING_BLOCKS.get());
         maid.getBrain().eraseMemory(ModMemories.PROJECT_UUID.get());
+    }
+
+    // 导航失败后随机游荡，避免螺旋搜索立刻重新碰到同一棵树
+    private void pickRandomAndMove(EntityMaid maid, ServerLevel level)
+    {
+        BlockPos here = maid.blockPosition();
+        double angle = maid.getRandom().nextDouble() * Math.PI * 2;
+        double dist = 10 + maid.getRandom().nextDouble() * 10;
+        int x = here.getX() + (int) Math.round(Math.cos(angle) * dist);
+        int z = here.getZ() + (int) Math.round(Math.sin(angle) * dist);
+        int groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+        LOGGER.info("ChopBehavior: roaming to ({},{},{}) maid={}", x, groundY, z, maid.getId());
+        maid.getNavigation().moveTo(x, groundY, z, 0.3);
     }
 }

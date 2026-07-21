@@ -4,13 +4,14 @@ import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.github.tartaricacid.touhoulittlemaid.api.event.MaidPickupEvent;
+import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
-import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
@@ -63,7 +64,21 @@ public class MaidMoreWork
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
-        NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> ProjectManager.tick((ServerLevel) e.getMaid().level()));
+        NeoForge.EVENT_BUS.addListener((MaidTickEvent e) ->
+        {
+            if (e.getMaid().level() instanceof ServerLevel serverLevel)
+            {
+                ProjectManager.tick(serverLevel);
+            }
+        });
+        // 砍树时阻断拾取，避免女仆一直跑去捡树叶掉落的树苗
+        NeoForge.EVENT_BUS.addListener((MaidPickupEvent.ItemResultPre e) ->
+        {
+            if (e.getMaid().getBrain().getMemory(ModMemories.PROJECT_UUID.get()).isPresent())
+            {
+                e.setCanPickup(false);
+            }
+        });
     }
 
 }

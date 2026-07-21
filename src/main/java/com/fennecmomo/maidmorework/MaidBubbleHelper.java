@@ -4,6 +4,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.ChatBubbleDataCollection;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
@@ -21,6 +24,8 @@ import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 //      - 多气泡冲突 → 移除我们的气泡
 public final class MaidBubbleHelper
 {
+    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
+
     // 全局实例池：UUID → helper（女仆首次请求气泡时自动创建）
     private static final Map<UUID, MaidBubbleHelper> INSTANCES = new HashMap<>();
 
@@ -41,7 +46,22 @@ public final class MaidBubbleHelper
         showBubble(maid, "跟随模式下无法" + action + "，请开启Home模式", 2 * 20);
     }
 
-    // ===================== 事件入口 =====================
+    // 立即清除当前女仆的所有持有气泡
+    public static void clearBubble(EntityMaid maid)
+    {
+        MaidBubbleHelper helper = INSTANCES.get(maid.getUUID());
+        if (helper != null)
+        {
+            helper.forceClear(maid);
+        }
+        // 兜底：遍历清空 ChatBubbleManager 中所有气泡
+        var bubbles = maid.getChatBubbleManager().getChatBubbleDataCollection();
+        long[] keys = bubbles.keySet().toLongArray();
+        for (long key : keys)
+        {
+            maid.getChatBubbleManager().removeChatBubble(key);
+        }
+    }
 
     // MaidTickEvent 入口：驱动该女仆的气泡生命周期
     // 由 MaidMoreWork 注册到 NeoForge.EVENT_BUS
@@ -67,9 +87,15 @@ public final class MaidBubbleHelper
     // ===================== 气泡设置 =====================
 
     // 设置持有文本并重置倒计时
-    // 如果有旧气泡正在显示，先从 ChatBubbleManager 移除（避免旧文本残留）
+    // 如果文本没变且气泡仍在显示，不打断（避免频繁设置导致 bubbleId 在 add 前被清为 -1）
     private void setBubble(EntityMaid maid, String text, int durationTicks)
     {
+        if (text.equals(pendingText) && bubbleId >= 0
+                && maid.getChatBubbleManager().getChatBubbleDataCollection().containsKey(bubbleId))
+        {
+            this.remainTicks = durationTicks;
+            return;
+        }
         if (maid.getChatBubbleManager().getChatBubbleDataCollection().containsKey(bubbleId))
         {
             maid.getChatBubbleManager().removeChatBubble(bubbleId);
@@ -141,5 +167,23 @@ public final class MaidBubbleHelper
             bubbleId = -1;
         }
         // else: 其他气泡在显示，等待对方自然消失
+    }
+
+    // 强制清除：立刻移除气泡并清空状态
+    private void forceClear(EntityMaid maid)
+    {
+        LOGGER.info("MaidBubbleHelper: forceClear called, bubbleId={} pendingText='{}' maid={}", bubbleId, pendingText, maid.getId());
+        if (bubbleId >= 0)
+        {
+            var bubbles = maid.getChatBubbleManager().getChatBubbleDataCollection();
+            if (bubbles.containsKey(bubbleId))
+            {
+                maid.getChatBubbleManager().removeChatBubble(bubbleId);
+                LOGGER.info("MaidBubbleHelper: force cleared bubble maid={}", maid.getId());
+            }
+        }
+        bubbleId = -1;
+        pendingText = null;
+        remainTicks = 0;
     }
 }

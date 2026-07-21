@@ -186,8 +186,8 @@ public class ChoppingProject extends CountingProject
 
     // ===================== BFS 工具 =====================
 
-    // BFS 搜索连通原木（仅收集原木，树叶由原版自然腐栏处理）
-    // 从单点出发，向 6 方向扩展，穿过树叶找连通的原木
+    // BFS 搜索连通原木（仅收集原木，不沿树叶爬以保持树与树的边界）
+    // 从单点出发，向 6 方向扩展，只沿原木方块连通
     public static void bfsLogs(ServerLevel level, BlockPos start, List<BlockPos> logs)
     {
         Set<BlockPos> visited = new HashSet<>();
@@ -201,14 +201,10 @@ public class ChoppingProject extends CountingProject
             if (state.is(BlockTags.LOGS))
             {
                 logs.add(p);
-            }
-            for (Direction d : Direction.values())
-            {
-                BlockPos nb = p.relative(d);
-                if (!visited.contains(nb))
+                for (Direction d : Direction.values())
                 {
-                    BlockState ns = level.getBlockState(nb);
-                    if (ns.is(BlockTags.LOGS) || ns.is(BlockTags.LEAVES))
+                    BlockPos nb = p.relative(d);
+                    if (!visited.contains(nb) && level.getBlockState(nb).is(BlockTags.LOGS))
                     {
                         visited.add(nb);
                         queue.add(nb);

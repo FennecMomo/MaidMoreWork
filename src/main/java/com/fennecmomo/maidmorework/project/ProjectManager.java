@@ -140,13 +140,18 @@ public final class ProjectManager
         if (tickCounter < CHECK_INTERVAL) return;
         tickCounter = 0;
 
+        LOGGER.info("ProjectManager: tick checking {} projects", PROJECTS.size());
+
         Iterator<Map.Entry<UUID, ProjectBase>> it = PROJECTS.entrySet().iterator();
         while (it.hasNext())
         {
             Map.Entry<UUID, ProjectBase> entry = it.next();
             ProjectBase project = entry.getValue();
 
-            if (!project.isLoaded()) continue;
+            if (!project.isLoaded())
+            {
+                continue;
+            }
 
             // 统一调度缓存空洞检测
             project.tick(level);
