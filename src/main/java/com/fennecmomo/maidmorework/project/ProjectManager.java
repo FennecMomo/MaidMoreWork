@@ -89,6 +89,7 @@ public final class ProjectManager
     public static void releaseMaid(EntityMaid maid)
     {
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
+        LOGGER.info("ProjectManager: DIAG releaseMaid called, maid={} projectUuid={}", maid.getUUID(), projectUuid);
         if (projectUuid == null) return;
 
         ProjectBase project = PROJECTS.get(projectUuid);

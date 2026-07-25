@@ -18,6 +18,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -83,11 +84,11 @@ public class MaidMoreWork
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
-        NeoForge.EVENT_BUS.addListener((MaidTickEvent e) ->
-        {
-            if (e.getMaid().level() instanceof ServerLevel serverLevel)
+        // 全局工程管理器生命周期，由服务端心跳驱动，不依赖女仆实例
+        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> {
+            for (ServerLevel level : e.getServer().getAllLevels())
             {
-                ProjectManager.tick(serverLevel);
+                ProjectManager.tick(level);
             }
         });
         // 砍树时阻断拾取，避免女仆一直跑去捡树叶掉落的树苗
@@ -110,8 +111,10 @@ public class MaidMoreWork
             }
         });
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
-        NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) ->
-                ProjectManager.releaseMaid(e.getMaid()));
+        NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
+                LOGGER.info("MaidMoreWork: DIAG ToItem event fired, maid={}", e.getMaid().getUUID());
+                ProjectManager.releaseMaid(e.getMaid());
+        });
     }
 
 }
