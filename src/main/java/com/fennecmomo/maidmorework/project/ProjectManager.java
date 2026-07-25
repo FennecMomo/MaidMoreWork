@@ -80,6 +80,7 @@ public final class ProjectManager
         {
             releasePositions(removed);
             dataDirty = true;
+            hudForceSync = true;
             LOGGER.info("ProjectManager: removed project {}", projectId);
         }
     }
@@ -107,7 +108,6 @@ public final class ProjectManager
         if (project.getParticipants().isEmpty())
         {
             remove(project.getId());
-            requestHudSync();
             LOGGER.info("ProjectManager: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
         }
     }
@@ -294,7 +294,7 @@ public final class ProjectManager
         if (!project.isCompleted()) return false;
 
         project.onComplete(level);
-        removeProject(project, it);
+        remove(project, it);
         return true;
     }
 
@@ -324,13 +324,13 @@ public final class ProjectManager
         // 3. 参与者全部清空 → 移除孤儿工程
         if (project.getParticipants().isEmpty())
         {
-            removeProject(project, it);
+            remove(project, it);
         }
     }
 
     // 释放坐标映射 + 从工程列表中移除（checkCompleted / cleanInactiveParticipants 共用）
-    private static void removeProject(ProjectBase project,
-                                       Iterator<Map.Entry<UUID, ProjectBase>> it)
+    private static void remove(ProjectBase project,
+                               Iterator<Map.Entry<UUID, ProjectBase>> it)
     {
         releasePositions(project);
         it.remove();
