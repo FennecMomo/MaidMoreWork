@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fennecmomo.maidmorework.MaidBubbleHelper;
+import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
@@ -42,19 +43,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
-    // 随机游荡距离范围（螺旋耗尽后选一个远处点导航过去再搜）
-    private static final double MIN_DIST = 20;
-    private static final double MAX_DIST = 35;
-
-    // 速度倍率，TLM 的 MaidMoveControl 会乘以 MOVEMENT_SPEED 属性再 *3
-    // 0.3 是 TLM 随机闲逛的倍率
-    private static final double WALK_SPEED = 0.3;
-
-    // 每 tick 处理的螺旋点数
-    private static final int SPIRAL_BATCH = 100;
-
     // 家园模式下螺旋耗尽后的静默 tick 数
-    private static final int SILENCE_TICKS = 10;
 
 
     // ===================== 配置字段 =====================
@@ -83,6 +72,9 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // 静默倒计时（螺旋耗尽后等待一段时间再试）
     private int silenceTicks = 0;
+
+    // 诊断：首帧打印家园状态
+    private boolean diagLogged = false;
 
     // ===================== 构造器 =====================
 
@@ -238,7 +230,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
             MaidBubbleHelper.showFollowWarn(maid);
-            silenceTicks = SILENCE_TICKS;
+            silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
             return true;
         }
         return false;
@@ -263,7 +255,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
             initSpiral(maid.blockPosition());
         }
 
-        for (int i = 0; i < SPIRAL_BATCH && !spiralQueue.isEmpty(); i++)
+        for (int i = 0; i < MaidMoreWorkConfig.SPIRAL_BATCH && !spiralQueue.isEmpty(); i++)
         {
             BlockPos point = spiralQueue.poll();
             spiralHitCount++;
@@ -281,8 +273,10 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 螺旋耗尽处理：清空螺旋状态，根据模式选择后续策略
     private void handleSpiralExhausted(EntityMaid maid)
     {
+        int savedScanned = spiralHitCount;
+        int savedFiltered = spiralFilteredCount;
         LOGGER.info("SearchBehavior: spiral exhausted at {} scanned={} filteredByHome={} homePos={} homeRadius={} maid={}",
-                spiralOrigin, spiralHitCount, spiralFilteredCount,
+                spiralOrigin, savedScanned, savedFiltered,
                 maid.hasHome() ? maid.getHomePosition() : "none",
                 maid.hasHome() ? maid.getHomeRadius() : -1,
                 maid.getId());
@@ -294,7 +288,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
         if (useHomeRestriction && maid.hasHome())
         {
-            enterSilenceWithHint(maid);
+            enterSilenceWithHint(maid, savedScanned, savedFiltered);
         }
         else
         {
@@ -322,7 +316,25 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 非家居模式下用固定 scanHalfXZ/scanYDown/scanYUp 作为边界
     private void expandSpiral(BlockPos point, EntityMaid maid)
     {
-        boolean restricted = useHomeRestriction && maid.hasHome();
+        boolean hasHome = maid.hasHome();
+        // 只在螺旋原点位于家园范围内时才启用家园限制
+        // 否则用固定范围，避免原点在家外时螺旋一帧耗尽
+        boolean restricted = useHomeRestriction && hasHome
+                && spiralOrigin != null && maid.isWithinHome(spiralOrigin);
+
+        if (!diagLogged)
+        {
+            diagLogged = true;
+            LOGGER.info("SearchBehavior: DIAG expandSpiral first call — useHomeRestriction={} hasHome={} homePos={} homeRadius={} origin={} originWithinHome={} restricted={} point={} isWithinHome={} maid={}",
+                    useHomeRestriction, hasHome,
+                    hasHome ? maid.getHomePosition() : "N/A",
+                    hasHome ? maid.getHomeRadius() : -1,
+                    spiralOrigin,
+                    hasHome && spiralOrigin != null ? maid.isWithinHome(spiralOrigin) : "N/A",
+                    restricted, point,
+                    hasHome ? maid.isWithinHome(point) : "N/A",
+                    maid.getId());
+        }
 
         for (int dx = -1; dx <= 1; dx++)
         {
@@ -365,13 +377,13 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // ===================== 耗尽后策略 =====================
 
     // 家园限制模式：进入静默等待，弹气泡提示家园范围内无资源
-    private void enterSilenceWithHint(EntityMaid maid)
+    private void enterSilenceWithHint(EntityMaid maid, int scanned, int filtered)
     {
-        silenceTicks = SILENCE_TICKS;
+        silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
         String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
-        MaidBubbleHelper.showBubble(maid, "家园范围内没有可用的" + target, 2 * 20);
+        MaidBubbleHelper.showBubble(maid, "家园没有可用" + target + "(扫" + scanned + "拦" + filtered + ")", MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
         LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
-                SILENCE_TICKS, maid.getId());
+                MaidMoreWorkConfig.SILENCE_TICKS, maid.getId());
     }
 
     // 非限制模式：选随机方向导航到 20~35 格外的某个点
@@ -381,12 +393,12 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         BlockPos here = maid.blockPosition();
         double angle = maid.getRandom().nextDouble() * Math.PI * 2;
-        double dist = MIN_DIST + maid.getRandom().nextDouble() * (MAX_DIST - MIN_DIST);
+        double dist = MaidMoreWorkConfig.SEARCH_ROAM_MIN_DIST + maid.getRandom().nextDouble() * (MaidMoreWorkConfig.SEARCH_ROAM_MAX_DIST - MaidMoreWorkConfig.SEARCH_ROAM_MIN_DIST);
         int x = here.getX() + (int) Math.round(Math.cos(angle) * dist);
         int z = here.getZ() + (int) Math.round(Math.sin(angle) * dist);
         ServerLevel level = (ServerLevel) maid.level();
         int groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-        maid.getNavigation().moveTo(x, groundY, z, WALK_SPEED);
+        maid.getNavigation().moveTo(x, groundY, z, MaidMoreWorkConfig.SEARCH_ROAM_WALK_SPEED);
     }
 
     // ===================== 目标清理 =====================
@@ -408,5 +420,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralVisited = null;
         spiralOrigin = null;
         silenceTicks = 0;
+        diagLogged = false;
     }
 }

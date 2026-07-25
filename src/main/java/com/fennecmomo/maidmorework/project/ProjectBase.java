@@ -12,8 +12,10 @@ import org.slf4j.LoggerFactory;
 import com.mojang.serialization.Codec;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.Level;
 
 // 工程基类：统一管理女仆工作工程的基础设施
 //
@@ -55,6 +57,7 @@ public abstract class ProjectBase
     // ===================== 核心标识 =====================
 
     private UUID projectId = UUID.randomUUID();
+    private ResourceKey<Level> dimension;   // 工程所在维度
 
     // ===================== 参与者管理 =====================
 
@@ -94,10 +97,12 @@ public abstract class ProjectBase
 
     // Codec 反序列化构造：指定 UUID + 参与者 + 目标方块
     protected ProjectBase(UUID projectId, int maxParticipants,
+                          ResourceKey<Level> dimension,
                           List<UUID> participants, List<BlockPos> targetBlocks)
     {
         this.projectId = projectId;
         this.maxParticipants = maxParticipants;
+        this.dimension = dimension;
         this.participants.addAll(participants);
         this.targetBlocks = new ArrayList<>(targetBlocks);
     }
@@ -107,6 +112,17 @@ public abstract class ProjectBase
     public UUID getId()
     {
         return projectId;
+    }
+
+    public ResourceKey<Level> getDimension()
+    {
+        return dimension;
+    }
+
+    // 供 LoggingTask 等调用方在构造后设置维度（不通过 codec 走的新建工程）
+    public void setDimension(ResourceKey<Level> dimension)
+    {
+        this.dimension = dimension;
     }
 
     // ===================== 加载状态 =====================

@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework.project;
 
+import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.mojang.serialization.Codec;
@@ -9,9 +10,13 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,9 +59,10 @@ public class ChoppingProject extends CountingProject
             BlockPos.CODEC.fieldOf("rootPos").forGetter(ChoppingProject::getPosition),
             BlockPos.CODEC.listOf().fieldOf("logs").forGetter(ChoppingProject::getTargetBlocks),
             Codec.INT.fieldOf("workload").forGetter(ChoppingProject::getWorkload),
-            Codec.INT.fieldOf("progress").forGetter(ChoppingProject::getProgress),
+            Codec.DOUBLE.fieldOf("progress").forGetter(ChoppingProject::getProgress),
             Codec.BOOL.optionalFieldOf("completed", false).forGetter(ChoppingProject::getCompleted),
-            UUIDUtil.CODEC.listOf().optionalFieldOf("participants", List.of()).forGetter(ChoppingProject::getParticipants)
+            UUIDUtil.CODEC.listOf().optionalFieldOf("participants", List.of()).forGetter(ChoppingProject::getParticipants),
+            ResourceKey.codec(Registries.DIMENSION).fieldOf("dimension").forGetter(ChoppingProject::getDimension)
         ).apply(inst, ChoppingProject::fromCodec));
 
     public static final Codec<ChoppingProject> CODEC = MAP_CODEC.codec();
@@ -64,9 +70,10 @@ public class ChoppingProject extends CountingProject
     // Codec 工厂方法：从反序列化字段构建工程实例
     private static ChoppingProject fromCodec(
         UUID id, BlockPos rootPos, List<BlockPos> logs,
-        int workload, int progress, boolean completed, List<UUID> participants)
+        int workload, double progress, boolean completed, List<UUID> participants,
+        ResourceKey<Level> dimension)
     {
-        ChoppingProject project = new ChoppingProject(id, rootPos, workload, progress, completed, logs, participants);
+        ChoppingProject project = new ChoppingProject(id, rootPos, workload, progress, completed, logs, participants, dimension);
         return project;
     }
 
@@ -86,10 +93,11 @@ public class ChoppingProject extends CountingProject
 
     // Codec 反序列化构造：指定全部字段
     private ChoppingProject(UUID id, BlockPos rootPos, int workload,
-                            int progress, boolean completed,
-                            List<BlockPos> logs, List<UUID> participants)
+                            double progress, boolean completed,
+                            List<BlockPos> logs, List<UUID> participants,
+                            ResourceKey<Level> dimension)
     {
-        super(id, MAX_PARTICIPANTS, workload, progress, completed, participants, logs);
+        super(id, MAX_PARTICIPANTS, workload, progress, completed, dimension, participants, logs);
         this.rootPos = rootPos;
     }
 
@@ -108,20 +116,45 @@ public class ChoppingProject extends CountingProject
         return level.getBlockState(pos).is(BlockTags.LOGS);
     }
 
+    // 斧子加速：手持物品对原木的破坏速度作为进度增量
+    @Override
+    protected double getProgressIncrement(ServerLevel level, BlockPos pos, EntityMaid maid)
+    {
+        BlockState state = level.getBlockState(pos);
+        float destroySpeed = maid.getMainHandItem().getDestroySpeed(state);
+        float hardness = state.getDestroySpeed(level, pos);
+        // 原版每 tick 进度 = destroySpeed / (hardness * 30)
+        return destroySpeed * MaidMoreWorkConfig.CHOP_INTERVAL / (hardness * 30);
+    }
+
     // 目标列表重建：BFS 重扫连通原木
     // 更新 targetBlocks + workload，progress 保持不变
     // 返回 false 表示已无有效原木（树消失）
     @Override
     protected boolean rebuild(ServerLevel level)
     {
-        // 从原木列表中找仍有效的起点
-        BlockPos start = null;
-        for (BlockPos pos : targetBlocks)
+        // 优先从 rootPos 开始 BFS
+        BlockPos start;
+        if (level.getBlockState(rootPos).is(BlockTags.LOGS))
         {
-            if (level.getBlockState(pos).is(BlockTags.LOGS))
+            start = rootPos;
+        }
+        else
+        {
+            // rootPos 上的原木已消失 → 找距离 rootPos 最近的一个有效原木
+            start = null;
+            double bestDist = Double.MAX_VALUE;
+            for (BlockPos pos : targetBlocks)
             {
-                start = pos;
-                break;
+                if (level.getBlockState(pos).is(BlockTags.LOGS))
+                {
+                    double dist = pos.distSqr(rootPos);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        start = pos;
+                    }
+                }
             }
         }
         if (start == null)
@@ -149,27 +182,23 @@ public class ChoppingProject extends CountingProject
     @Override
     public boolean isActive(ServerLevel level, UUID maidUuid)
     {
-        // 基类通用：实体存在性 + 区块卸载保护
         if (!shouldRetainParticipant(level, maidUuid))
         {
             return false;
         }
 
-        // 实体不在但区块卸载 → shouldRetainParticipant 已 setLoaded(false)，保留参与者
         EntityMaid maid = (EntityMaid) level.getEntity(maidUuid);
         if (maid == null)
         {
             return true;
         }
 
-        // 女仆是否仍在砍树任务中
         String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("");
         if (!ModMemories.WORK_ACTION_CHOPPING.equals(action))
         {
             return false;
         }
 
-        // 女仆的目标工程是否是自己
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         return getId().equals(projectUuid);
     }

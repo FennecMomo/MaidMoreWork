@@ -59,10 +59,6 @@ public class LoggingTask implements IMaidTask
     @Override
     public List<Pair<Integer, BehaviorControl<? super EntityMaid>>> createBrainTasks(EntityMaid maid)
     {
-        // 写入工作关键词，供 SearchBehavior 拼气泡文案
-        maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
-        maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
-
         List<Pair<Integer, BehaviorControl<? super EntityMaid>>> tasks = new ArrayList<>();
         // SearchBehavior 负责螺旋遍历坐标，每个坐标点调用 scanForTree 检查
         // onTreeFound 负责找到树后的 BFS + 工程创建 + Memory 写入
@@ -81,7 +77,9 @@ public class LoggingTask implements IMaidTask
     // 不包含 BFS、工程创建、Memory 写入等后续逻辑
     private boolean scanForTree(ServerLevel level, BlockPos point, EntityMaid maid)
     {
+        maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
         if (!level.isLoaded(point)) return false;
+        if (ProjectManager.isPositionClaimed(level, point)) return false;
         BlockState state = level.getBlockState(point);
         if (!state.is(BlockTags.LOGS)) return false;
         return hasAdjacentLeaves(level, point);
@@ -102,6 +100,7 @@ public class LoggingTask implements IMaidTask
         // 创建砍树工程并注册到 ProjectManager
         BlockPos rootPos = findTreeBase(logs);
         ChoppingProject project = new ChoppingProject(rootPos, logs);
+        project.setDimension(level.dimension());
         project.claim(maid.getUUID());
         ProjectManager.register(project);
 
@@ -124,9 +123,8 @@ public class LoggingTask implements IMaidTask
     {
         // 搜索范围 30 格（与家园范围大致匹配）
         ChoppingProject orphan = ProjectManager.findAvailableProject(maid, 30 * 30, ChoppingProject.class);
-        if (orphan != null)
+        if (orphan != null && orphan.claim(maid.getUUID()))
         {
-            orphan.claim(maid.getUUID());
             maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), orphan.getId());
             LOGGER.info("LoggingTask: maid {} claimed orphan project {}", maid.getId(), orphan.getId());
             return true;

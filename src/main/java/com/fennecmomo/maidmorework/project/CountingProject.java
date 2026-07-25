@@ -11,8 +11,12 @@ import org.slf4j.LoggerFactory;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 // 计数型工程基类：抽象计数 + 批量破坏 + 按贡献分配掉落物
@@ -33,9 +37,12 @@ public abstract class CountingProject extends ProjectBase
 
     // ===================== 计数型进度 =====================
 
-    protected int progress = 0;      // 已执行次数（抽象计数器，不与方块索引挂钩）
-    protected int workload;          // 目标总次数
+    protected double progress = 0.0;   // 进度（支持小数，如斧子破坏速度）
+    protected int workload;            // 目标总次数
     protected boolean completed = false;
+
+    // UUID → 累计工具磨损（小数，>= 1.0 时扣除耐久）
+    private final Map<UUID, Double> toolWear = new HashMap<>();
 
     // ===================== 构造 =====================
 
@@ -47,10 +54,11 @@ public abstract class CountingProject extends ProjectBase
 
     // Codec 反序列化构造：指定全部字段
     protected CountingProject(UUID projectId, int maxParticipants, int workload,
-                              int progress, boolean completed,
+                              double progress, boolean completed,
+                              ResourceKey<Level> dimension,
                               List<UUID> participants, List<BlockPos> targetBlocks)
     {
-        super(projectId, maxParticipants, participants, targetBlocks);
+        super(projectId, maxParticipants, dimension, participants, targetBlocks);
         this.workload = workload;
         this.progress = progress;
         this.completed = completed;
@@ -58,7 +66,7 @@ public abstract class CountingProject extends ProjectBase
 
     // ===================== 数据访问 =====================
 
-    public int getProgress()
+    public double getProgress()
     {
         return progress;
     }
@@ -107,11 +115,14 @@ public abstract class CountingProject extends ProjectBase
         }
 
         BlockPos refPos = getPosition();
-        int progressInc = getProgressIncrement(level, refPos, maid);
+        double progressInc = getProgressIncrement(level, refPos, maid);
         int contribInc = getContributionIncrement(level, refPos, maid);
 
         progress += progressInc;
         addContribution(maidUuid, contribInc);
+        accumulateToolWear(maid, progressInc);
+
+        ProjectManager.requestHudSync();
 
         LOGGER.info("CountingProject: execute progress={}/{} contrib={} maid={} project={}",
                 progress, workload, contribInc, maidUuid, getId());
@@ -148,7 +159,7 @@ public abstract class CountingProject extends ProjectBase
 
     // 本次执行的进度增量，子类可覆写（如受工具/buff 影响）
     // 默认返回 1
-    protected int getProgressIncrement(ServerLevel level, BlockPos pos, EntityMaid maid)
+    protected double getProgressIncrement(ServerLevel level, BlockPos pos, EntityMaid maid)
     {
         return 1;
     }
@@ -158,6 +169,27 @@ public abstract class CountingProject extends ProjectBase
     protected int getContributionIncrement(ServerLevel level, BlockPos pos, EntityMaid maid)
     {
         return 1;
+    }
+
+    // ===================== 工具磨损 =====================
+
+    // 累计工具磨损值（与进度增量等量），>= 1.0 时扣除耐久，余额继续累积
+    protected void accumulateToolWear(EntityMaid maid, double amount)
+    {
+        double wear = toolWear.getOrDefault(maid.getUUID(), 0.0) + amount;
+        while (wear >= 1.0)
+        {
+            maid.getMainHandItem().hurtAndBreak(1, maid, EquipmentSlot.MAINHAND);
+            wear -= 1.0;
+        }
+        toolWear.put(maid.getUUID(), wear);
+    }
+
+    @Override
+    public void release(UUID maidUuid)
+    {
+        super.release(maidUuid);
+        toolWear.remove(maidUuid);
     }
 
     // ===================== 按贡献分配掉落物 =====================

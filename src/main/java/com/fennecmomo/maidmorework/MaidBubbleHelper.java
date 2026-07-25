@@ -43,7 +43,7 @@ public final class MaidBubbleHelper
     public static void showFollowWarn(EntityMaid maid)
     {
         String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("工作");
-        showBubble(maid, "跟随模式下无法" + action + "，请开启Home模式", 2 * 20);
+        showBubble(maid, "跟随模式下无法" + action + "，请开启Home模式", MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
     }
 
     // 立即清除当前女仆的所有持有气泡

@@ -4,6 +4,8 @@ import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
+import com.fennecmomo.maidmorework.project.hud.ProjectHudRenderer;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidPickupEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
@@ -15,7 +17,11 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 // maidmorework 模组主类（@Mod 入口）
 // 负责：
@@ -24,6 +30,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 @Mod(MaidMoreWork.MODID)
 public class MaidMoreWork
 {
+    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
     public static final String MODID = "maidmorework";
 
     // 创造模式标签页注册
@@ -62,6 +69,17 @@ public class MaidMoreWork
         MineRegistration.MENUS.register(modBus);
         CREATIVE_TABS.register(modBus);
 
+        // 网络包注册
+        modBus.addListener((RegisterPayloadHandlersEvent event) ->
+        {
+            PayloadRegistrar registrar = event.registrar("1");
+            registrar.playToClient(
+                    ProjectHudPayload.TYPE,
+                    ProjectHudPayload.STREAM_CODEC,
+                    (payload, context) -> ProjectHudRenderer.sync(payload)
+            );
+        });
+
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) ->
@@ -77,6 +95,17 @@ public class MaidMoreWork
             if (e.getMaid().getBrain().getMemory(ModMemories.PROJECT_UUID.get()).isPresent())
             {
                 e.setCanPickup(false);
+            }
+            else
+            {
+                // 诊断拾取打断：PROJECT_UUID 不存在但仍处于砍树任务中时，说明 H1 导致记忆被错误清除
+                boolean inChopTask = ModMemories.WORK_ACTION_CHOPPING.equals(
+                        e.getMaid().getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse(""));
+                if (inChopTask)
+                {
+                    LOGGER.info("MaidMoreWork: PICKUP_DIAG maid={} PROJECT_UUID=absent WORK_ACTION=chopping -> pickup NOT blocked",
+                            e.getMaid().getId());
+                }
             }
         });
     }
