@@ -1,6 +1,8 @@
 package com.fennecmomo.maidmorework.project;
 
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
+import com.fennecmomo.maidmorework.ModAttachments;
+import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
@@ -79,6 +81,33 @@ public final class ProjectManager
             releasePositions(removed);
             dataDirty = true;
             LOGGER.info("ProjectManager: removed project {}", projectId);
+        }
+    }
+
+    // 强制女仆退出当前参与的工程，并清理大脑和附件中的工程引用
+    // 参与者归零时自动删除工程 + 标记 HUD 脏
+    public static void releaseMaid(EntityMaid maid)
+    {
+        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
+        if (projectUuid == null) return;
+
+        ProjectBase project = PROJECTS.get(projectUuid);
+        if (project == null)
+        {
+            maid.getBrain().eraseMemory(ModMemories.PROJECT_UUID.get());
+            maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
+            return;
+        }
+
+        project.release(maid.getUUID());
+        maid.getBrain().eraseMemory(ModMemories.PROJECT_UUID.get());
+        maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
+
+        if (project.getParticipants().isEmpty())
+        {
+            remove(project.getId());
+            requestHudSync();
+            LOGGER.info("ProjectManager: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
         }
     }
 

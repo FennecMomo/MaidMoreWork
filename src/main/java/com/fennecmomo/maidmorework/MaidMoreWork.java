@@ -6,6 +6,7 @@ import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.project.ProjectManager;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudRenderer;
+import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidPickupEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
@@ -108,6 +109,9 @@ public class MaidMoreWork
                 }
             }
         });
+        // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
+        NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) ->
+                ProjectManager.releaseMaid(e.getMaid()));
     }
 
 }
