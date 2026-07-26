@@ -8,9 +8,6 @@ import com.fennecmomo.maidmorework.MaidMoreWork;
 import com.fennecmomo.maidmorework.project.CountingProject;
 import com.fennecmomo.maidmorework.project.ProjectBase;
 import com.fennecmomo.maidmorework.project.ProjectServerHelper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -27,8 +24,6 @@ import net.minecraft.resources.Identifier;
 // buildAll 从 ProjectServerHelper 遍历全部工程生成 payload
 public record ProjectHudPayload(List<Entry> entries) implements CustomPacketPayload
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     // 网络包类型标识：maidmorework:project_hud
     public static final Type<ProjectHudPayload> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath(MaidMoreWork.MODID, "project_hud"));
@@ -63,8 +58,6 @@ public record ProjectHudPayload(List<Entry> entries) implements CustomPacketPayl
                 progress = cp.getProgress();
                 workload = cp.getWorkload();
             }
-            LOGGER.info("ProjectHudPayload: entry project={} participants={} progress={}/{}",
-                    project.getId(), project.getParticipants().size(), progress, workload);
             return new Entry(
                     project.getId(), project.getPosition(), project.type(),
                     progress, workload, project.getParticipants().size(), project.isCompleted()

@@ -18,9 +18,6 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -42,8 +39,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @EventBusSubscriber(modid = MaidMoreWork.MODID)
 public final class ProjectServerHelper
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     // 检查间隔：60 tick = 3 秒
     private static final int CHECK_INTERVAL = 60;
 
@@ -69,8 +64,6 @@ public final class ProjectServerHelper
         PROJECTS.put(project.getId(), project);
         claimPositions(project);
         dataDirty = true;
-        LOGGER.info("ProjectServerHelper: registered project {} (type={}, pos={})",
-                project.getId(), project.getClass().getSimpleName(), project.getPosition());
     }
 
     // 从管理器注销工程
@@ -81,7 +74,6 @@ public final class ProjectServerHelper
         {
             releasePositions(removed);
             dataDirty = true;
-            LOGGER.info("ProjectServerHelper: removed project {}", projectId);
         }
     }
 
@@ -107,7 +99,6 @@ public final class ProjectServerHelper
         if (project.getParticipants().isEmpty())
         {
             remove(project.getId());
-            LOGGER.info("ProjectServerHelper: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
         }
     }
 
@@ -209,8 +200,6 @@ public final class ProjectServerHelper
         if (tickCounter < CHECK_INTERVAL) return;
         tickCounter = 0;
 
-        LOGGER.info("ProjectServerHelper: tick checking {} projects", PROJECTS.size());
-
         // ====== 4. 遍历工程：空洞检测 → 完成移除 → 参与者清理 ======
         MinecraftServer server = event.getServer();
         Iterator<Map.Entry<UUID, ProjectBase>> it = PROJECTS.entrySet().iterator();
@@ -269,11 +258,9 @@ public final class ProjectServerHelper
                     data.load();
                 }
             }
-            LOGGER.info("ProjectServerHelper: loaded from SavedData, {} projects", PROJECTS.size());
         }
         catch (Exception e)
         {
-            LOGGER.error("ProjectServerHelper: failed to load from SavedData", e);
         }
     }
 
@@ -304,7 +291,6 @@ public final class ProjectServerHelper
         }
         catch (Exception e)
         {
-            LOGGER.error("ProjectServerHelper: failed to sync to SavedData", e);
         }
     }
 
@@ -340,8 +326,6 @@ public final class ProjectServerHelper
         // 2. 逐一清退
         for (UUID maidUuid : toRemove)
         {
-            LOGGER.info("ProjectServerHelper: releasing inactive maid {} from project {}",
-                    maidUuid, project.getId());
             project.release(maidUuid);
         }
 
@@ -359,7 +343,6 @@ public final class ProjectServerHelper
         releasePositions(project);
         it.remove();
         dataDirty = true;
-        LOGGER.info("ProjectServerHelper: project {} removed", project.getId());
     }
 
     // ===================== 维度+坐标映射表 =====================

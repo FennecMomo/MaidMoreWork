@@ -22,9 +22,6 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredRegister;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 // maidmorework 模组主类（@Mod 入口）
 // 负责：
 // 1. 注册所有 DeferredRegister（Memory、Attachment、MineBlock、菜单、数据组件、创造模式标签）
@@ -32,7 +29,6 @@ import org.slf4j.LoggerFactory;
 @Mod(MaidMoreWork.MODID)
 public class MaidMoreWork
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
     public static final String MODID = "maidmorework";
 
     // 创造模式标签页注册

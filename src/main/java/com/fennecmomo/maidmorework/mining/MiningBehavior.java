@@ -26,9 +26,6 @@ import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemStacksResourceHandler;
 import net.neoforged.neoforge.transfer.transaction.Transaction;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.*;
 
 // 挖矿行为：女仆加入矿井后，按螺旋规划逐层挖掘/填充/照明/替换
@@ -38,8 +35,6 @@ import java.util.*;
 // SearchBehavior 找到矿井方块 → 写 Memory → 本行为启动
 public class MiningBehavior extends Behavior<EntityMaid>
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     private static final int MINE_INTERVAL = 10;       // 挖一个方块的 tick 间隔
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;        // 导航速度倍率
@@ -112,7 +107,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
-        LOGGER.info("MiningBehavior START maid={}", maid.getId());
         equipPickaxe(maid);
         mineTimer = 0;
         reachedTarget = false;
@@ -134,14 +128,10 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 be.joinMine(maid);
             }
             // 诊断日志：Home 设置后状态
-            LOGGER.info("MiningBehavior: joinMine done maid={} homePos={} homeMode={} homeRadius={}",
-                    maid.getId(), maid.getHomePosition(), maid.isHomeModeEnable(),
-                    maid.hasHome() ? "set" : "none");
         }
 
         if (currentTask != null && !level.isLoaded(currentTask.pos()))
         {
-            LOGGER.info("MiningBehavior: target {} not loaded, discarding maid={}", currentTask.pos(), maid.getId());
             clearAll(maid);
         }
     }
@@ -163,9 +153,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
             BlockPos maidPos = maid.blockPosition();
             BlockPos homePos = maid.getHomePosition();
             double dist = maidPos.distSqr(homePos);
-            LOGGER.info("MiningBehavior: HOME_DIAG maid={} pos={} home={} distSq={} homeMode={}",
-                    maid.getId(), maidPos.toShortString(), homePos.toShortString(),
-                    dist, maid.isHomeModeEnable());
         }
 
         // 准备阶段未完成：顺序检查存矿/取垫脚/取火把，缺什么就导航到矿井方块处理
@@ -182,20 +169,15 @@ public class MiningBehavior extends Behavior<EntityMaid>
             if (currentTask == null)
             {
                 // 矿井已无任务可干，结束挖矿行为
-                LOGGER.info("MiningBehavior: no more tasks, finishing maid={}", maid.getId());
                 finishMining(level, maid);
                 return;
             }
-            LOGGER.info("MiningBehavior: new task {} at {} maidY={} maid={}",
-                    currentTask.type(), currentTask.pos().toShortString(),
-                    maid.blockPosition().getY(), maid.getId());
         }
 
         BlockPos targetPos = currentTask.pos();
 
         if (!level.isLoaded(targetPos))
         {
-            LOGGER.info("MiningBehavior: target {} not loaded, skipping maid={}", targetPos, maid.getId());
             releaseCurrentTarget(level);
             return;
         }
@@ -240,7 +222,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 BlockPos walkTarget = findWalkTarget(level, targetPos);
                 if (walkTarget == null)
                 {
-                    LOGGER.info("MiningBehavior: no walk target near {} maid={}", targetPos, maid.getId());
                     releaseCurrentTarget(level);
                     reachedTarget = false;
                     navFailCount = 0;
@@ -298,9 +279,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                     }
                 }
 
-                LOGGER.info("MiningBehavior: mined {} maid={}", targetPos, maid.getId());
-
-                // 通知矿井任务已完成
                 notifyTaskComplete(level, targetPos);
                 checkBelowSafety(level, maid, targetPos);
 
@@ -310,7 +288,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
 
                 // 背包没有空格了 → 触发回矿井方块存东西
                 boolean full = isInventoryFull(maid);
-                LOGGER.info("MiningBehavior: inventory full={} maid={}", full, maid.getId());
                 if (full)
                 {
                     preparationReady = false;
@@ -322,9 +299,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
         {
             if (tryPlaceScaffold(level, maid, targetPos))
             {
-                LOGGER.info("MiningBehavior: filled scaffold {} maid={}", targetPos, maid.getId());
-
-                // 通知矿井任务已完成
                 notifyTaskComplete(level, targetPos);
 
                 currentTask = null;
@@ -360,7 +334,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 // 空气 → 放火把
                 if (tryPlaceTorch(level, maid, targetPos))
                 {
-                    LOGGER.info("MiningBehavior: placed torch at {} maid={}", targetPos, maid.getId());
                     notifyTaskComplete(level, targetPos);
                     currentTask = null;
                     reachedTarget = false;
@@ -395,7 +368,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 // 空气或非固体 → 放垫脚方块
                 if (tryPlaceScaffold(level, maid, targetPos))
                 {
-                    LOGGER.info("MiningBehavior: replaced with scaffold at {} maid={}", targetPos, maid.getId());
                     notifyTaskComplete(level, targetPos);
                     currentTask = null;
                     reachedTarget = false;
@@ -427,7 +399,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
         // 1. 背包满了 → 回矿井方块存东西
         if (isInventoryFull(maid))
         {
-            LOGGER.info("MiningBehavior: inventory full, nearMine={} maid={}", isNearMineBlock(maid), maid.getId());
             if (isNearMineBlock(maid))
             {
                 depositToMineBlock(level, maid);
@@ -442,7 +413,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
 
         // 2. 缺垫脚方块 → 通用请求
         boolean hasScaffold = hasScaffoldBlock(maid);
-        LOGGER.info("MiningBehavior: hasScaffold={} maid={}", hasScaffold, maid.getId());
         if (!hasScaffold)
         {
             if (requestItemFromMineBlock(level, maid, this::isScaffoldItem,
@@ -523,7 +493,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
         {
             if (inv.getResource(i).isEmpty()) emptyCount++;
         }
-        LOGGER.info("MiningBehavior: inventory check total={} empty={} maid={}", totalSlots, emptyCount, maid.getId());
         return emptyCount == 0;
     }
 
@@ -597,7 +566,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 }
             }
         }
-        LOGGER.info("MiningBehavior: deposited items to mine block maid={}", maid.getId());
     }
 
     // 尝试从矿井方块容器中取出一个匹配的物品给女仆
@@ -628,7 +596,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
                     if (inserted > 0)
                     {
                         tx.commit();
-                        LOGGER.info("MiningBehavior: retrieved {} from mine block maid={}", taken.getItem(), maid.getId());
                         return true;
                     }
                 }
@@ -668,8 +635,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
         currentTask = be.requestNextTask(maid);
         if (currentTask != null)
         {
-            LOGGER.info("MiningBehavior: next task {} {} maid={}",
-                    currentTask.type(), currentTask.pos(), maid.getId());
         }
     }
 
@@ -804,13 +769,11 @@ public class MiningBehavior extends Behavior<EntityMaid>
                 Block.popResource(level, pos, leftover);
             }
         }
-        LOGGER.info("MiningBehavior: mineAndCollect {} maid={}", pos, maid.getId());
     }
 
     // 挖矿完成（无任务可干）：清空状态并结束
     private void finishMining(ServerLevel level, EntityMaid maid)
     {
-        LOGGER.info("MiningBehavior: mining finished maid={}", maid.getId());
         clearAll(maid);
     }
 
@@ -823,7 +786,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
-        LOGGER.info("MiningBehavior STOP maid={}", maid.getId());
         MineBlockEntity be = null;
         if (mineBlockPos != null)
         {
@@ -847,14 +809,12 @@ public class MiningBehavior extends Behavior<EntityMaid>
                     ItemStack leftover = addToInventory(maid, drop);
                     if (!leftover.isEmpty()) Block.popResource(level, pos, leftover);
                 }
-                LOGGER.info("MiningBehavior: stop-completed DIG {} maid={}", pos, maid.getId());
                 be.completeTarget(pos);
             }
             else if (currentTask.type() == DigTask.Type.FILL)
             {
                 if (tryPlaceScaffold(level, maid, pos))
                 {
-                    LOGGER.info("MiningBehavior: stop-completed FILL {} maid={}", pos, maid.getId());
                     be.completeTarget(pos);
                 }
                 else
@@ -915,14 +875,12 @@ public class MiningBehavior extends Behavior<EntityMaid>
                     Block.popResource(level, brokenPos, leftover);
                 }
             }
-            LOGGER.info("MiningBehavior: fluid removed at {} maid={}", below, maid.getId());
             return;
         }
 
         // 下方是不可破坏方块（基岩等）→ 停机
         if (belowState.getDestroySpeed(level, below) < 0)
         {
-            LOGGER.info("MiningBehavior: unbreakable at {}, SHUTDOWN maid={}", below, maid.getId());
             if (mineBlockPos != null
                     && level.getBlockEntity(mineBlockPos) instanceof MineBlockEntity mbe)
             {
@@ -935,7 +893,6 @@ public class MiningBehavior extends Behavior<EntityMaid>
         if (!tryFillBelow(level, maid, below))
         {
             // 女仆没有垫脚方块，创建 FILL 任务去矿井取
-            LOGGER.info("MiningBehavior: fill needed at {}, no scaffold maid={}", below, maid.getId());
             if (mineBlockPos != null
                     && level.getBlockEntity(mineBlockPos) instanceof MineBlockEntity be
                     && be.hasInstance())

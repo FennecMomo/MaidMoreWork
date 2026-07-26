@@ -5,9 +5,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
@@ -33,8 +30,6 @@ import net.minecraft.world.level.block.state.BlockState;
 //   - getPosition()    工程绑定位置
 public abstract class CountingProject extends ProjectBase
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     // ===================== 计数型进度 =====================
 
     protected double progress = 0.0;   // 进度（支持小数，如斧子破坏速度）
@@ -102,7 +97,6 @@ public abstract class CountingProject extends ProjectBase
 
         if (targetBlocks.isEmpty())
         {
-            LOGGER.info("CountingProject: targetBlocks empty, marking complete project={}", getId());
             completed = true;
             return false;
         }
@@ -110,7 +104,6 @@ public abstract class CountingProject extends ProjectBase
         Entity entity = level.getEntity(maidUuid);
         if (!(entity instanceof EntityMaid maid))
         {
-            LOGGER.info("CountingProject: maid not found for uuid={}, project={}", maidUuid, getId());
             return false;
         }
 
@@ -120,14 +113,9 @@ public abstract class CountingProject extends ProjectBase
 
         progress += progressInc;
         addContribution(maidUuid, contribInc);
-        accumulateToolWear(maid, progressInc);
-
-        LOGGER.info("CountingProject: execute progress={}/{} contrib={} maid={} project={}",
-                progress, workload, contribInc, maidUuid, getId());
 
         if (progress >= workload)
         {
-            LOGGER.info("CountingProject: progress reached workload, triggering completion project={}", getId());
             completeTargets(level);
             return false;
         }
@@ -147,7 +135,6 @@ public abstract class CountingProject extends ProjectBase
         }
         if (isCacheStale(level))
         {
-            LOGGER.info("CountingProject: cache gap detected in tick, rebuilding project={}", getId());
             if (!rebuild(level))
             {
                 completed = true;
@@ -196,9 +183,6 @@ public abstract class CountingProject extends ProjectBase
     // 进入时先剔除离线参与者（execute 驱动者必然在线，不会全员离线）
     protected void completeTargets(ServerLevel level)
     {
-        LOGGER.info("CountingProject: completing {} blocks, project={}", targetBlocks.size(), getId());
-
-        // 前置剔除离线参与者：工程即将销毁，修改参与者 Map 无副作用
         Map<UUID, Integer> onlineContributions = new HashMap<>();
         for (Map.Entry<UUID, Integer> entry : getContributions().entrySet())
         {

@@ -3,9 +3,6 @@ package com.fennecmomo.maidmorework.mining;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.search.SearchBehavior;
 import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
@@ -36,7 +33,6 @@ import net.minecraft.world.item.Items;
 // 而 LoggingTask 的 scanAction 查找的是原木方块
 public class MiningTask implements IMaidTask
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
     // 任务唯一标识，用于注册和查找
     public static final Identifier UID = Identifier.fromNamespaceAndPath("maidmorework", "mining");
 
@@ -86,7 +82,6 @@ public class MiningTask implements IMaidTask
         // 检查该坐标是否为矿井方块
         if (level.getBlockState(point).getBlock() instanceof MineBlock)
         {
-            LOGGER.info("MiningTask: found mine block at {} maid={}", point, maid.getId());
             // 写入目标 Memory，SearchBehavior 检测到后停止
             // TODO: 后续换为挖矿专用 Memory
             maid.getBrain().setMemory(ModMemories.LOG_BLOCKS.get(), List.of(point));

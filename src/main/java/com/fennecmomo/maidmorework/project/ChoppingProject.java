@@ -17,9 +17,6 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -39,8 +36,6 @@ import java.util.UUID;
 //   3. 女仆的目标工程是否是自己
 public class ChoppingProject extends CountingProject
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     // 砍树工程只允许一人参与
     private static final int MAX_PARTICIPANTS = 1;
 
@@ -159,7 +154,7 @@ public class ChoppingProject extends CountingProject
         }
         if (start == null)
         {
-            LOGGER.info("ChoppingProject: no valid log remaining, project={}", getId());
+
             return false;
         }
 
@@ -167,8 +162,7 @@ public class ChoppingProject extends CountingProject
         List<BlockPos> newLogs = new ArrayList<>();
         bfsLogs(level, start, newLogs);
 
-        LOGGER.info("ChoppingProject: rebuild found {} logs project={}",
-                newLogs.size(), getId());
+
 
         // progress 保持不变，仅更新 targetBlocks 和 workload
         this.targetBlocks = newLogs;
@@ -210,7 +204,7 @@ public class ChoppingProject extends CountingProject
     @Override
     public void onComplete(ServerLevel level)
     {
-        LOGGER.info("ChoppingProject: project completed, id={}", getId());
+
     }
 
     // ===================== BFS 工具 =====================

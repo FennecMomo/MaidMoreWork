@@ -4,9 +4,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.fennecmomo.maidmorework.MaidBubbleHelper;
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModAttachments;
@@ -45,10 +42,6 @@ import net.neoforged.neoforge.transfer.transaction.Transaction;
 // 砍伐逻辑（缓存验证、重 BFS、批量破坏、掉落物分配）全部在 ChoppingProject 中
 public class ChopBehavior extends Behavior<EntityMaid>
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
-
-
     private int chopTimer = 0;        // 当前砍伐计时
     private boolean reachedTree = false;  // 是否已到达树脚附近
     private boolean roaming = false;      // 导航失败后正在游荡，stop 时不打断导航
@@ -94,8 +87,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
             ChoppingProject project = ProjectServerHelper.getAvailableProject(savedUuid.get(), ChoppingProject.class);
             if (project != null)
             {
-                LOGGER.info("ChopBehavior: restored memory from attachment, project={} maid={}",
-                        savedUuid.get(), maid.getId());
+
                 maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), savedUuid.get());
                 maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
                 maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
@@ -103,8 +95,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
             }
             else
             {
-                LOGGER.info("ChopBehavior: attachment project {} no longer available, maid={}",
-                        savedUuid.get(), maid.getId());
+
             }
         }
         return false;
@@ -115,13 +106,13 @@ public class ChopBehavior extends Behavior<EntityMaid>
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
-        LOGGER.info("ChopBehavior START maid={}", maid.getId());
+
         MaidBubbleHelper.get(maid).clearAll();
         MaidBubbleHelper.get(maid).clearFloor();
         maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
         if (maid.getNavigation().isInProgress())
         {
-            LOGGER.info("ChopBehavior: navigation still in progress on start, stopping maid={}", maid.getId());
+
         }
         maid.getNavigation().stop();
         equipAxe(maid);
@@ -138,7 +129,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         if (projectUuid == null)
         {
-            LOGGER.info("ChopBehavior: PROJECT_UUID memory lost, stopping maid={}", maid.getId());
+
             stopChop(maid);
             return;
         }
@@ -146,7 +137,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         ChoppingProject project = ProjectServerHelper.getProject(projectUuid, ChoppingProject.class);
         if (project == null)
         {
-            LOGGER.info("ChopBehavior: project not found, finishing maid={}", maid.getId());
+
             stopChop(maid);
             return;
         }
@@ -174,7 +165,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         {
             reachedTree = true;
             maid.getNavigation().stop();
-            LOGGER.info("ChopBehavior: reached tree base, starting chop maid={}", maid.getId());
+
             return;
         }
 
@@ -199,11 +190,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 if (distSq < MaidMoreWorkConfig.CLOSE_ENOUGH_SQ)
                 {
                     reachedTree = true;
-                    LOGGER.info("ChopBehavior: close enough despite nav failure maid={}", maid.getId());
+
                 }
                 else
                 {
-                    LOGGER.info("ChopBehavior: too far and nav failed, roaming away maid={}", maid.getId());
+
                     ProjectServerHelper.remove(project.getId());
                     roaming = true;
                     pickRandomAndMove(maid, level);
@@ -213,8 +204,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
         else
         {
-            LOGGER.info("ChopBehavior: waiting for other navigation to finish, dist={} maid={}",
-                    Math.sqrt(distSq), maid.getId());
+
         }
     }
 
@@ -238,7 +228,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         double distSq = dx * dx + dz * dz;
         if (distSq > MaidMoreWorkConfig.CLOSE_ENOUGH_SQ)
         {
-            LOGGER.info("ChopBehavior: drifted too far during chop, re-navigating maid={}", maid.getId());
+
             reachedTree = false;
             return;
         }
@@ -258,13 +248,11 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
             // 委托工程执行一次砍伐
             boolean isParticipant = project.getParticipants().contains(maid.getUUID());
-            LOGGER.info("ChopBehavior: chop tick project={} isParticipant={} participantCount={}",
-                    project.getId(), isParticipant, project.getParticipants().size());
+
 
             boolean continuing = project.execute(level, maid.getUUID());
 
-            LOGGER.info("ChopBehavior: chop progress={}/{} project={} maid={}",
-                    project.getProgress(), project.getWorkload(), project.getId(), maid.getId());
+
 
             equipAxe(maid);
 
@@ -291,7 +279,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
         clearAllMemory(maid);
         maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
-        LOGGER.info("ChopBehavior: stopped maid={}", maid.getId());
+
     }
 
     // 行为停止（被打断）：清空状态
@@ -317,7 +305,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         chopTimer = 0;
         reachedTree = false;
         maid.getConfigManager().setPickup(savedPickup);
-        LOGGER.info("ChopBehavior: interrupted maid={}", maid.getId());
+
     }
 
     // ===================== 辅助方法 =====================
@@ -341,8 +329,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
             {
                 maid.setItemSlot(EquipmentSlot.OFFHAND, currentTool);
                 maid.setItemSlot(EquipmentSlot.MAINHAND, offHand);
-                LOGGER.info("ChopBehavior: equipped axe from off-hand, speed {} -> {} maid={}",
-                        currentSpeed, offSpeed, maid.getId());
+
                 return;
             }
         }
@@ -383,8 +370,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
             tx.commit();
         }
         maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(bestRes.getItem(), 1));
-        LOGGER.info("ChopBehavior: upgraded axe in main hand, speed {} -> {} maid={}",
-                currentSpeed, bestSpeed, maid.getId());
+
     }
 
     // 清空所有伐木相关 Memory
@@ -408,7 +394,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         int x = here.getX() + (int) Math.round(Math.cos(angle) * dist);
         int z = here.getZ() + (int) Math.round(Math.sin(angle) * dist);
         int groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-        LOGGER.info("ChopBehavior: roaming to ({},{},{}) maid={}", x, groundY, z, maid.getId());
+
         maid.getNavigation().moveTo(x, groundY, z, MaidMoreWorkConfig.ROAM_SPEED);
     }
 }

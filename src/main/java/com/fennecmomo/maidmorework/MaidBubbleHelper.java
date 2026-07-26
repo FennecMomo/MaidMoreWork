@@ -5,9 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.ChatBubbleDataCollection;
 import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.IChatBubbleData;
 import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.implement.TextChatBubbleData;
@@ -29,8 +26,6 @@ import net.minecraft.server.level.ServerLevel;
 //   ③ 有气泡 → setText + forceUpdateChatBubble 改字
 public final class MaidBubbleHelper
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     private static final Map<UUID, MaidBubbleHelper> INSTANCES = new HashMap<>();
 
     // ===================== 静态 API =====================

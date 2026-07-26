@@ -6,9 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.mojang.serialization.Codec;
 
 import net.minecraft.core.BlockPos;
@@ -39,8 +36,6 @@ import net.minecraft.world.level.Level;
 //   - rebuild()        目标列表重建（缓存空洞时调用）
 public abstract class ProjectBase
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
-
     // ===================== 多态序列化 =====================
 
     // 基类 Codec：通过 type 字段分派到对应子类的 MAP_CODEC
@@ -201,10 +196,8 @@ public abstract class ProjectBase
         }
         if (isCacheStale(level))
         {
-            LOGGER.info("ProjectBase: cache stale detected, rebuilding project={}", getId());
             if (!rebuild(level))
             {
-                LOGGER.info("ProjectBase: rebuild failed, no valid targets project={}", getId());
             }
         }
     }
@@ -252,14 +245,10 @@ public abstract class ProjectBase
         // 实体不在 → 检查工程位置区块是否已卸载
         if (!level.isLoaded(getPosition()))
         {
-            LOGGER.info("ProjectBase: entity not found, chunk unloaded, sleeping project={} maid={}",
-                    getId(), maidUuid);
             setLoaded(false);
             return true;
         }
 
-        LOGGER.info("ProjectBase: entity gone, removing participant project={} maid={}",
-                getId(), maidUuid);
         return false;
     }
 

@@ -3,9 +3,6 @@ package com.fennecmomo.maidmorework.logging;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.ChoppingProject;
@@ -33,7 +30,6 @@ import net.minecraft.world.level.block.state.BlockState;
 // 砍树流程：由 ChopBehavior 负责，导航 + 替换 + 标记 + 收集
 public class LoggingTask implements IMaidTask
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
     // 任务唯一标识
     public static final Identifier UID = Identifier.fromNamespaceAndPath("maidmorework", "logging");
 
@@ -95,7 +91,6 @@ public class LoggingTask implements IMaidTask
 
         if (logs.isEmpty()) return false;
 
-        LOGGER.info("LoggingTask: BFS found {} logs from {}", logs.size(), point);
 
         // 创建砍树工程并注册到 ProjectServerHelper
         BlockPos rootPos = findTreeBase(logs);
@@ -110,8 +105,6 @@ public class LoggingTask implements IMaidTask
         // 同步写 Attachment（世界重进后恢复引用）
         maid.setData(ModAttachments.PROJECT_UUID_SAVED, java.util.Optional.of(project.getId()));
 
-        LOGGER.info("LoggingTask: created ChoppingProject {} ({} logs) maid={}",
-                project.getId(), logs.size(), maid.getId());
         return true;
     }
 
@@ -126,7 +119,6 @@ public class LoggingTask implements IMaidTask
         if (orphan != null && orphan.claim(maid.getUUID()))
         {
             maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), orphan.getId());
-            LOGGER.info("LoggingTask: maid {} claimed orphan project {}", maid.getId(), orphan.getId());
             return true;
         }
         return false;

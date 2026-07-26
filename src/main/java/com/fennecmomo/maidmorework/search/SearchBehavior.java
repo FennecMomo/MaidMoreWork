@@ -6,9 +6,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.fennecmomo.maidmorework.MaidBubbleHelper;
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModMemories;
@@ -40,8 +37,6 @@ import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 public class SearchBehavior extends Behavior<EntityMaid>
 {
     // ===================== 常量 =====================
-
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
     // 家园模式下螺旋耗尽后的静默 tick 数
 
@@ -150,14 +145,12 @@ public class SearchBehavior extends Behavior<EntityMaid>
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
-        LOGGER.info("SearchBehavior START maid={}", maid.getId());
-        silenceTicks = 0;
         MaidBubbleHelper.get(maid).clearAll();
 
         // 前置检索：优先查找孤儿工程（如无人接手的砍树工程）
         if (preSearch != null && preSearch.search(level, maid.blockPosition(), maid))
         {
-            LOGGER.info("SearchBehavior: preSearch found orphan project maid={}", maid.getId());
+
             return;
         }
 
@@ -220,7 +213,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
-        LOGGER.info("SearchBehavior STOP maid={}", maid.getId());
         maid.getNavigation().stop();
         resetState();
     }
@@ -276,7 +268,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
             if (scanAction.search(level, point, maid))
             {
                 lastFoundPoint = point;
-                LOGGER.info("SearchBehavior: found target at {} maid={}", point, maid.getId());
                 return true;
             }
             expandSpiral(point, maid);
@@ -289,11 +280,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         int savedScanned = spiralHitCount;
         int savedFiltered = spiralFilteredCount;
-        LOGGER.info("SearchBehavior: spiral exhausted at {} scanned={} filteredByHome={} homePos={} homeRadius={} maid={}",
-                spiralOrigin, savedScanned, savedFiltered,
-                maid.hasHome() ? maid.getHomePosition() : "none",
-                maid.hasHome() ? maid.getHomeRadius() : -1,
-                maid.getId());
         spiralQueue = null;
         spiralVisited = null;
         spiralOrigin = null;
@@ -397,8 +383,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
         MaidBubbleHelper helper = MaidBubbleHelper.get(maid);
         helper.clearFloor();
         helper.set("家园没有可用" + target + "(扫" + scanned + "拦" + filtered + ")", -999);
-        LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
-                MaidMoreWorkConfig.SILENCE_TICKS, maid.getId());
     }
 
     // 非限制模式：选随机方向导航到 20~35 格外的某个点

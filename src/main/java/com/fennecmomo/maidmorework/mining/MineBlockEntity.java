@@ -25,9 +25,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 // 矿井实体方块的 BlockEntity（矿井核心数据对象）
 // 存储矿井完整数据：ID + 主人 + 矿区尺寸 + 女仆列表 + 储物 + 挖掘进度
 // 世界重进后自动恢复实例到内存（onLoad）
@@ -35,7 +32,7 @@ import org.slf4j.LoggerFactory;
 // 任务分配流程：requestNextTask → 按 Y 层从高到低分配 → 同层内就近分配
 public class MineBlockEntity extends BlockEntity implements Container
 {
-    private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
+
     private long idMost = 0L;      // 矿井实例 ID 高位
     private long idLeast = 0L;     // 矿井实例 ID 低位
     private long ownerMost = 0L;   // 矿井主人 UUID 高位
@@ -99,8 +96,6 @@ public class MineBlockEntity extends BlockEntity implements Container
         }
         initPlanner();
         setChanged();
-        LOGGER.info("MineBlockEntity created at {}, L={} W={} plannerCenterY={}",
-                getBlockPos().toShortString(), mineL, mineW, getBlockPos().getY() - 1);
     }
 
     // 获取矿井实例 ID
@@ -252,9 +247,6 @@ public class MineBlockEntity extends BlockEntity implements Container
         DigTask task = findNearestTaskInCurrentLayer(maidPos);
         if (task != null)
         {
-            LOGGER.info("MineBlockEntity: assigned task {} at {} (maidY={}, layer={}/{})",
-                    task.type(), task.pos().toShortString(), maidPos.getY(),
-                    currentLayerIndex, sortedY.size());
             return task;
         }
 
@@ -277,8 +269,6 @@ public class MineBlockEntity extends BlockEntity implements Container
                     // DIG 目标变成空气 = 已挖完; FILL 目标变成固体 = 已填充
                     if ((isKeep && !air && st.isSolid()) || (!isKeep && air))
                     {
-                        LOGGER.info("MineBlockEntity: stale target removed {} (keep={}, air={})",
-                                assigned.toShortString(), isKeep, air);
                         it.remove();
                     }
                 }
@@ -291,8 +281,6 @@ public class MineBlockEntity extends BlockEntity implements Container
         // 如果还有女仆正在工作，等待她们完成
         if (!assignedTargets.isEmpty())
         {
-            LOGGER.info("MineBlockEntity: layer {} no new tasks, waiting for {} assigned",
-                    currentLayerIndex, assignedTargets.size());
             return null;
         }
 
@@ -302,14 +290,11 @@ public class MineBlockEntity extends BlockEntity implements Container
 
         if (currentLayerIndex < sortedY.size())
         {
-            LOGGER.info("MineBlockEntity: layer done, advancing to layer {}/{} (Y={})",
-                    currentLayerIndex, sortedY.size(), sortedY.get(currentLayerIndex));
             setChanged();
             return null;
         }
 
         // 所有层完成，推进周期
-        LOGGER.info("MineBlockEntity: all layers done, cycle {} complete", currentCycle);
         advanceCycle();
         return null;
     }
@@ -538,11 +523,8 @@ public class MineBlockEntity extends BlockEntity implements Container
             Set<BlockPos> k = currentCycleKeeps.get(y);
             Set<BlockPos> l = currentCycleLights.get(y);
             Set<BlockPos> r = currentCycleReplaces.get(y);
-            LOGGER.info("MineBlockEntity cycle layer Y={} keeps={} lights={} replaces={} mineY={}",
-                    y, k == null ? 0 : k.size(), l == null ? 0 : l.size(), r == null ? 0 : r.size(), mineY);
         }
 
-        LOGGER.info("MineBlockEntity computed cycle C={}: Y layers={}", C, sortedY);
     }
 
     // 在矿区边界向外加一圈保留方块，形成围墙
@@ -582,7 +564,6 @@ public class MineBlockEntity extends BlockEntity implements Container
     {
         shutdown = true;
         assignedTargets.clear();
-        LOGGER.info("MineBlockEntity: SHUTDOWN at {}", getBlockPos().toShortString());
 
         // 召回所有关联女仆
         for (int i = 0; i < maidIdMosts.size(); i++)
@@ -695,8 +676,6 @@ public class MineBlockEntity extends BlockEntity implements Container
         if (layerIndex < 0 || layerIndex >= sortedY.size()) return result;
         int y = sortedY.get(layerIndex);
         Set<BlockPos> keeps = keepsByY.get(y);
-        LOGGER.info("getDigBlocksForLayer layer={} Y={} keeps={} sortedYLayers={}",
-                layerIndex, y, keeps.size(), sortedY);
 
         for (int x = planner.getMinX(); x <= planner.getMaxX(); x++)
         {
@@ -709,8 +688,6 @@ public class MineBlockEntity extends BlockEntity implements Container
                 }
             }
         }
-        LOGGER.info("getDigBlocksForLayer returning {} blocks, range X=[{},{}] Z=[{},{}]",
-                result.size(), planner.getMinX(), planner.getMaxX(), planner.getMinZ(), planner.getMaxZ());
         return result;
     }
 
