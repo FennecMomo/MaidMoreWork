@@ -8,7 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.ChatBubbleDataCollection;
+import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.IChatBubbleData;
+import com.github.tartaricacid.touhoulittlemaid.entity.chatbubble.implement.TextChatBubbleData;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
+
+import net.minecraft.network.chat.Component;
 
 // 女仆气泡生命周期管理器（每女仆一个实例，静态 Map 管理）
 //
@@ -61,6 +65,26 @@ public final class MaidBubbleHelper
         {
             maid.getChatBubbleManager().removeChatBubble(key);
         }
+    }
+
+    // 直接更新已有气泡的文字内容，无闪烁不重建
+    // 如果当前还没有气泡，退化为 showBubble 创建新的
+    public static void updateBubble(EntityMaid maid, String text)
+    {
+        MaidBubbleHelper helper = INSTANCES.get(maid.getUUID());
+        if (helper != null && helper.bubbleId >= 0)
+        {
+            IChatBubbleData data = maid.getChatBubbleManager().getChatBubbleDataCollection().get(helper.bubbleId);
+            if (data instanceof TextChatBubbleData textBubble)
+            {
+                textBubble.setText(Component.literal(text));
+                maid.getChatBubbleManager().forceUpdateChatBubble();
+                helper.pendingText = text;
+                helper.remainTicks = Math.max(helper.remainTicks, 5);
+                return;
+            }
+        }
+        showBubble(maid, text, 5);
     }
 
     // MaidTickEvent 入口：驱动该女仆的气泡生命周期
@@ -152,7 +176,7 @@ public final class MaidBubbleHelper
         return false;
     }
 
-    // 气泡环境调度：无气泡时显示，有气泡时冲突处理
+    // 气泡环境调度：无气泡时显示，多气泡冲突时移除
     private void resolveDisplay(EntityMaid maid, ChatBubbleDataCollection bubbles)
     {
         if (bubbles.isEmpty())
@@ -160,9 +184,9 @@ public final class MaidBubbleHelper
             // 无气泡 → 显示持有文本
             bubbleId = maid.getChatBubbleManager().addTextChatBubble(pendingText);
         }
-        else if (bubbles.containsKey(bubbleId))
+        else if (bubbles.size() > 1 && bubbles.containsKey(bubbleId))
         {
-            // 我们的气泡在多个气泡中 → 移除避免叠加
+            // 多个气泡冲突：移除我们的避免叠加
             maid.getChatBubbleManager().removeChatBubble(bubbleId);
             bubbleId = -1;
         }

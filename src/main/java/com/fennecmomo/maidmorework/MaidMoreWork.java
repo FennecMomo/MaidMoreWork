@@ -8,7 +8,6 @@ import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
-import com.github.tartaricacid.touhoulittlemaid.api.event.MaidPickupEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -94,25 +93,6 @@ public class MaidMoreWork
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
-        // 砍树时阻断拾取，避免女仆一直跑去捡树叶掉落的树苗
-        NeoForge.EVENT_BUS.addListener((MaidPickupEvent.ItemResultPre e) ->
-        {
-            if (e.getMaid().getBrain().getMemory(ModMemories.PROJECT_UUID.get()).isPresent())
-            {
-                e.setCanPickup(false);
-            }
-            else
-            {
-                // 诊断拾取打断：PROJECT_UUID 不存在但仍处于砍树任务中时，说明 H1 导致记忆被错误清除
-                boolean inChopTask = ModMemories.WORK_ACTION_CHOPPING.equals(
-                        e.getMaid().getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse(""));
-                if (inChopTask)
-                {
-                    LOGGER.info("MaidMoreWork: PICKUP_DIAG maid={} PROJECT_UUID=absent WORK_ACTION=chopping -> pickup NOT blocked",
-                            e.getMaid().getId());
-                }
-            }
-        });
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
                 LOGGER.info("MaidMoreWork: DIAG ToItem event fired, maid={}", e.getMaid().getUUID());

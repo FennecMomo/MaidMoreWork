@@ -69,6 +69,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private Set<BlockPos> spiralVisited = null;
     private int spiralHitCount = 0;    // 本螺旋周期内扫描的点数
     private int spiralFilteredCount = 0; // 被 isWithinHome 过滤掉的点数
+    private int spiralTotalEstimate = 0; // 本螺旋周期的预估总点数（非限制=15376，限制≈球体体积）
 
     // 静默倒计时（螺旋耗尽后等待一段时间再试）
     private int silenceTicks = 0;
@@ -163,7 +164,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        initSpiral(maid.blockPosition());
+        initSpiral(maid.blockPosition(), maid);
     }
 
     // 每 tick 驱动：静默检查 → 导航等待 → 批量搜索 → 耗尽处理
@@ -193,6 +194,22 @@ public class SearchBehavior extends Behavior<EntityMaid>
                 lastFoundPoint = null;
             }
             return;
+        }
+
+        // 搜索进行中：每 tick 刷新进度气泡
+        if (spiralQueue != null && !spiralQueue.isEmpty() && spiralTotalEstimate > 0)
+        {
+            String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
+            String progress;
+            if (spiralFilteredCount > 0)
+            {
+                progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]拦" + spiralFilteredCount;
+            }
+            else
+            {
+                progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]";
+            }
+            MaidBubbleHelper.updateBubble(maid, "搜索" + target + "中..." + progress);
         }
 
         // 螺旋范围耗尽，根据模式选择后续策略
@@ -252,7 +269,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         if (spiralQueue == null)
         {
-            initSpiral(maid.blockPosition());
+            initSpiral(maid.blockPosition(), maid);
         }
 
         for (int i = 0; i < MaidMoreWorkConfig.SPIRAL_BATCH && !spiralQueue.isEmpty(); i++)
@@ -285,6 +302,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralOrigin = null;
         spiralHitCount = 0;
         spiralFilteredCount = 0;
+        spiralTotalEstimate = 0;
 
         if (useHomeRestriction && maid.hasHome())
         {
@@ -300,7 +318,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
 
     // 以原点初始化螺旋队列，清空已访问集合
     // 螺旋遍历从原点开始向 26 个方向逐步扩展
-    private void initSpiral(BlockPos origin)
+    private void initSpiral(BlockPos origin, EntityMaid maid)
     {
         spiralOrigin = origin;
         spiralQueue = new ArrayDeque<>();
@@ -309,6 +327,18 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralVisited.add(origin);
         spiralHitCount = 0;
         spiralFilteredCount = 0;
+
+        boolean hasHome = maid.hasHome();
+        boolean originWithinHome = hasHome && maid.isWithinHome(origin);
+        if (useHomeRestriction && originWithinHome)
+        {
+            int r = maid.getHomeRadius();
+            spiralTotalEstimate = (int) (4.0 / 3.0 * Math.PI * r * r * r);
+        }
+        else
+        {
+            spiralTotalEstimate = (2 * scanHalfXZ + 1) * (2 * scanHalfXZ + 1) * (scanYDown + scanYUp + 1);
+        }
     }
 
     // 从当前点向 26 方向扩展螺旋（3x3x3 立方体的所有偏移）
@@ -419,6 +449,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralQueue = null;
         spiralVisited = null;
         spiralOrigin = null;
+        spiralTotalEstimate = 0;
         silenceTicks = 0;
         diagLogged = false;
     }

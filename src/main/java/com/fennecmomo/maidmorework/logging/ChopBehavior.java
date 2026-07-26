@@ -52,6 +52,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
     private int chopTimer = 0;        // 当前砍伐计时
     private boolean reachedTree = false;  // 是否已到达树脚附近
     private boolean roaming = false;      // 导航失败后正在游荡，stop 时不打断导航
+    private boolean savedPickup = false;  // start 时保存的原始拾取状态
 
     // 构造：无内存需求，永不超时
     public ChopBehavior()
@@ -125,6 +126,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
         equipAxe(maid);
         chopTimer = 0;
         reachedTree = false;
+        savedPickup = maid.getConfigManager().isPickup();
+        maid.getConfigManager().setPickup(false);
     }
 
     // 每 tick 驱动：导航到树脚 → 委托工程砍原木
@@ -177,9 +180,23 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
         if (!maid.getNavigation().isInProgress())
         {
+            BlockPos target = treeBase;
+            for (BlockPos adj : new BlockPos[]{
+                treeBase.east(), treeBase.west(), treeBase.south(), treeBase.north()
+            })
+            {
+                if (level.getBlockState(adj).isAir())
+                {
+                    target = adj;
+                    break;
+                }
+            }
+            LOGGER.info("ChopBehavior: DIAG navigating to ({}, {}, {}) project={} logs={}",
+                    target.getX() + 0.5, target.getY(), target.getZ() + 0.5,
+                    project.getId(), project.getTargetBlocks());
             boolean moved = maid.getNavigation().moveTo(
-                    treeBase.getX() + 0.5, treeBase.getY(),
-                    treeBase.getZ() + 0.5, MaidMoreWorkConfig.WALK_SPEED);
+                    target.getX() + 0.5, target.getY(),
+                    target.getZ() + 0.5, MaidMoreWorkConfig.WALK_SPEED);
             if (moved)
             {
                 MaidBubbleHelper.clearBubble(maid);
@@ -307,6 +324,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         roaming = false;
         chopTimer = 0;
         reachedTree = false;
+        maid.getConfigManager().setPickup(savedPickup);
         LOGGER.info("ChopBehavior: interrupted maid={}", maid.getId());
     }
 
