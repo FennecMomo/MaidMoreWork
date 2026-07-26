@@ -3,22 +3,23 @@ package com.fennecmomo.maidmorework;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
-import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.fennecmomo.maidmorework.project.ProjectClientHelper;
+import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
-import com.fennecmomo.maidmorework.project.hud.ProjectHudRenderer;
+import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidPickupEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -28,7 +29,7 @@ import org.slf4j.LoggerFactory;
 // maidmorework 模组主类（@Mod 入口）
 // 负责：
 // 1. 注册所有 DeferredRegister（Memory、Attachment、MineBlock、菜单、数据组件、创造模式标签）
-// 2. 注册命令和事件监听（MaidTickEvent 驱动 ProjectManager + MaidBubbleHelper）
+// 2. 注册命令和事件监听（MaidTickEvent 驱动 ProjectServerHelper + MaidBubbleHelper）
 @Mod(MaidMoreWork.MODID)
 public class MaidMoreWork
 {
@@ -78,19 +79,21 @@ public class MaidMoreWork
             registrar.playToClient(
                     ProjectHudPayload.TYPE,
                     ProjectHudPayload.STREAM_CODEC,
-                    (payload, context) -> ProjectHudRenderer.sync(payload)
+                    (payload, context) -> ProjectClientHelper.sync(payload)
+            );
+            registrar.playToServer(
+                    ProjectHudQueryPayload.TYPE,
+                    ProjectHudQueryPayload.STREAM_CODEC,
+                    (payload, context) -> {
+                        ServerPlayer player = (ServerPlayer) context.player();
+                        ProjectHudPayload response = ProjectServerHelper.getNearby(player, 32);
+                        PacketDistributor.sendToPlayer(player, response);
+                    }
             );
         });
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
-        // 全局工程管理器生命周期，由服务端心跳驱动，不依赖女仆实例
-        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> {
-            for (ServerLevel level : e.getServer().getAllLevels())
-            {
-                ProjectManager.tick(level);
-            }
-        });
         // 砍树时阻断拾取，避免女仆一直跑去捡树叶掉落的树苗
         NeoForge.EVENT_BUS.addListener((MaidPickupEvent.ItemResultPre e) ->
         {
@@ -113,7 +116,7 @@ public class MaidMoreWork
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
                 LOGGER.info("MaidMoreWork: DIAG ToItem event fired, maid={}", e.getMaid().getUUID());
-                ProjectManager.releaseMaid(e.getMaid());
+                ProjectServerHelper.releaseMaid(e.getMaid());
         });
     }
 

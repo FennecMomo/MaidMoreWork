@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.ChoppingProject;
-import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.search.SearchBehavior;
 import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
@@ -79,7 +79,7 @@ public class LoggingTask implements IMaidTask
     {
         maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
         if (!level.isLoaded(point)) return false;
-        if (ProjectManager.isPositionClaimed(level, point)) return false;
+        if (ProjectServerHelper.isPositionClaimed(level, point)) return false;
         BlockState state = level.getBlockState(point);
         if (!state.is(BlockTags.LOGS)) return false;
         return hasAdjacentLeaves(level, point);
@@ -97,12 +97,12 @@ public class LoggingTask implements IMaidTask
 
         LOGGER.info("LoggingTask: BFS found {} logs from {}", logs.size(), point);
 
-        // 创建砍树工程并注册到 ProjectManager
+        // 创建砍树工程并注册到 ProjectServerHelper
         BlockPos rootPos = findTreeBase(logs);
         ChoppingProject project = new ChoppingProject(rootPos, logs);
         project.setDimension(level.dimension());
         project.claim(maid.getUUID());
-        ProjectManager.register(project);
+        ProjectServerHelper.register(project);
 
         // 写入 PROJECT_UUID Memory
         maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), project.getId());
@@ -122,7 +122,7 @@ public class LoggingTask implements IMaidTask
     private boolean searchOrphanProject(ServerLevel level, BlockPos point, EntityMaid maid)
     {
         // 搜索范围 30 格（与家园范围大致匹配）
-        ChoppingProject orphan = ProjectManager.findAvailableProject(maid, 30 * 30, ChoppingProject.class);
+        ChoppingProject orphan = ProjectServerHelper.findAvailableProject(maid, 30 * 30, ChoppingProject.class);
         if (orphan != null && orphan.claim(maid.getUUID()))
         {
             maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), orphan.getId());

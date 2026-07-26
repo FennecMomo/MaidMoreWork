@@ -13,6 +13,7 @@ import com.mojang.serialization.Codec;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -66,7 +67,7 @@ public abstract class ProjectBase
 
     // ===================== 加载状态 =====================
 
-    // loaded=true 表示工程处于活跃状态，ProjectManager 正常检查
+    // loaded=true 表示工程处于活跃状态，ProjectServerHelper 正常检查
     // loaded=false 表示工程所在区块已卸载，跳过检查（休眠）
     // 女仆调用 API 或获取工程时自动重新标记为 true（唤醒）
     private boolean loaded = true;
@@ -188,7 +189,7 @@ public abstract class ProjectBase
 
     // ===================== 周期检查 =====================
 
-    // 由 ProjectManager.tick 统一调度，每 60 tick 调用一次
+    // 由 ProjectServerHelper.tick 统一调度，每 60 tick 调用一次
     // 检查缓存空洞：遍历 targetBlocks 委托 isValidTarget 判定
     // 发现空洞则调用 rebuild 重建目标列表
     // rebuild 返回 false 表示已无有效目标，由子类 tick 覆写决定后续处理
@@ -208,6 +209,13 @@ public abstract class ProjectBase
         }
     }
 
+    // 根据工程自身维度解析 ServerLevel，用于 isActive/isCacheStale 等需要世界状态的检查
+    protected ServerLevel resolveLevel(MinecraftServer server)
+    {
+        if (dimension == null || server == null) return null;
+        return server.getLevel(dimension);
+    }
+
     // ===================== 缓存验证 =====================
 
     // 遍历 targetBlocks 检查是否存在空洞（某个坐标已不是有效目标）
@@ -215,10 +223,18 @@ public abstract class ProjectBase
     // 返回 true 表示存在空洞，需调用 rebuild 重建
     protected boolean isCacheStale(ServerLevel level)
     {
+        LOGGER.info("ProjectBase: DIAG isCacheStale 开始扫描, targetBlocks总数={} project={}", targetBlocks.size(), getId());
+        for (BlockPos pos : targetBlocks)
+        {
+            LOGGER.info("ProjectBase: DIAG isCacheStale targetBlock @{} state={} valid={} project={}",
+                    pos.toShortString(), level.getBlockState(pos), isValidTarget(level, pos), getId());
+        }
         for (BlockPos pos : targetBlocks)
         {
             if (!isValidTarget(level, pos))
             {
+                LOGGER.info("ProjectBase: DIAG isCacheStale 发现空洞 @{} 实际方块={} project={}",
+                        pos.toShortString(), level.getBlockState(pos), getId());
                 return true;
             }
         }

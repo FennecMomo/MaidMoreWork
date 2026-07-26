@@ -94,7 +94,7 @@ public abstract class CountingProject extends ProjectBase
     // 1. 通过可覆写方法获取本次进度增量和贡献增量
     // 2. 进度累加，贡献累加
     // 3. 计数达到任务量 → 批量破坏 + 按贡献分配掉落物 → 标记完成
-    // 缓存空洞检测已移至 ProjectManager.tick 统一调度，此处不再检查
+    // 缓存空洞检测已移至 ProjectServerHelper.tick 统一调度，此处不再检查
     // 返回 true = 正常推进，返回 false = 无有效目标或已完成
     public boolean execute(ServerLevel level, UUID maidUuid)
     {
@@ -103,6 +103,7 @@ public abstract class CountingProject extends ProjectBase
         if (targetBlocks.isEmpty())
         {
             LOGGER.info("CountingProject: targetBlocks empty, marking complete project={}", getId());
+            LOGGER.info("CountingProject: DIAG completed入口=目标列表为空 project={}", getId());
             completed = true;
             return false;
         }
@@ -122,13 +123,12 @@ public abstract class CountingProject extends ProjectBase
         addContribution(maidUuid, contribInc);
         accumulateToolWear(maid, progressInc);
 
-        ProjectManager.requestHudSync();
-
         LOGGER.info("CountingProject: execute progress={}/{} contrib={} maid={} project={}",
                 progress, workload, contribInc, maidUuid, getId());
 
         if (progress >= workload)
         {
+            LOGGER.info("CountingProject: DIAG completed入口=进度达标, progress={}/{} project={}", progress, workload, getId());
             LOGGER.info("CountingProject: progress reached workload, triggering completion project={}", getId());
             completeTargets(level);
             return false;
@@ -152,6 +152,7 @@ public abstract class CountingProject extends ProjectBase
             LOGGER.info("CountingProject: cache gap detected in tick, rebuilding project={}", getId());
             if (!rebuild(level))
             {
+                LOGGER.info("CountingProject: DIAG completed入口=重建失败, 无有效目标 project={}", getId());
                 completed = true;
             }
         }

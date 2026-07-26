@@ -17,9 +17,9 @@ import net.minecraft.world.level.saveddata.SavedDataType;
 // 由 SavedDataType 注册到 Minecraft 的存档系统
 // 通过 level.getDataStorage().computeIfAbsent(ProjectData.TYPE) 访问
 //
-// 内部持有工程列表，与 ProjectManager 的内存缓存同步：
-//   - 世界加载时：从磁盘反序列化 → load() 填充 ProjectManager
-//   - 运行时：ProjectManager 修改后调用 setDirty() 标记脏
+// 内部持有工程列表，与 ProjectServerHelper 的内存缓存同步：
+//   - 世界加载时：从磁盘反序列化 → load() 填充 ProjectServerHelper
+//   - 运行时：ProjectServerHelper 修改后调用 setDirty() 标记脏
 //   - 世界保存时：存档系统自动序列化到磁盘
 public class ProjectData extends SavedData
 {
@@ -68,15 +68,15 @@ public class ProjectData extends SavedData
         return projects;
     }
 
-    // ===================== 与 ProjectManager 同步 =====================
+    // ===================== 与 ProjectServerHelper 同步 =====================
 
-    // 从磁盘加载后，将所有工程填充到 ProjectManager 的内存缓存
+    // 从磁盘加载后，将所有工程填充到 ProjectServerHelper 的内存缓存
     public void load()
     {
-        ProjectManager.loadFromData(this);
+        ProjectServerHelper.loadFromData(this);
     }
 
-    // 将 ProjectManager 的当前工程同步到此数据对象
+    // 将 ProjectServerHelper 的当前工程同步到此数据对象
     // 调用后应 setDirty() 触发存档系统写盘
     public void sync(Map<UUID, ProjectBase> projectMap)
     {

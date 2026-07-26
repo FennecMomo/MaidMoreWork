@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework.project;
 
+import com.fennecmomo.maidmorework.MaidMoreWork;
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
@@ -7,10 +8,16 @@ import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.server.ServerLifecycleHooks;
+
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +38,9 @@ import java.util.concurrent.ConcurrentHashMap;
 //   - 与 ProjectData (SavedData) 同步，实现工程数据持久化
 //   - 维度+坐标 → 工程的三维映射表：供女仆螺旋检索时查询某坐标是否已被已有工程占用
 //
-// 由 MaidMoreWork 构造函数中注册 MaidTickEvent 驱动 tick
-public final class ProjectManager
+// 由 @EventBusSubscriber 自动注册 ServerTickEvent.Post，不依赖其他模组
+@EventBusSubscriber(modid = MaidMoreWork.MODID)
+public final class ProjectServerHelper
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
 
@@ -47,18 +55,11 @@ public final class ProjectManager
 
     // tick 计数器
     private static int tickCounter = 0;
-    private static int hudSyncCounter = 0;
-    private static boolean hudForceSync = false;
-
-    public static void requestHudSync()
-    {
-        hudForceSync = true;
-    }
 
     // 持久化脏标记：工程注册/注销/完成时置 true，下次 tick 同步到 SavedData
     private static boolean dataDirty = false;
 
-    private ProjectManager() {}
+    private ProjectServerHelper() {}
 
     // ===================== 工程注册 =====================
 
@@ -68,7 +69,7 @@ public final class ProjectManager
         PROJECTS.put(project.getId(), project);
         claimPositions(project);
         dataDirty = true;
-        LOGGER.info("ProjectManager: registered project {} (type={}, pos={})",
+        LOGGER.info("ProjectServerHelper: registered project {} (type={}, pos={})",
                 project.getId(), project.getClass().getSimpleName(), project.getPosition());
     }
 
@@ -80,8 +81,7 @@ public final class ProjectManager
         {
             releasePositions(removed);
             dataDirty = true;
-            hudForceSync = true;
-            LOGGER.info("ProjectManager: removed project {}", projectId);
+            LOGGER.info("ProjectServerHelper: removed project {}", projectId);
         }
     }
 
@@ -90,7 +90,7 @@ public final class ProjectManager
     public static void releaseMaid(EntityMaid maid)
     {
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        LOGGER.info("ProjectManager: DIAG releaseMaid called, maid={} projectUuid={}", maid.getUUID(), projectUuid);
+        LOGGER.info("ProjectServerHelper: DIAG releaseMaid called, maid={} projectUuid={}", maid.getUUID(), projectUuid);
         if (projectUuid == null) return;
 
         ProjectBase project = PROJECTS.get(projectUuid);
@@ -107,8 +107,9 @@ public final class ProjectManager
 
         if (project.getParticipants().isEmpty())
         {
+            LOGGER.info("ProjectServerHelper: DIAG releaseMaid 即将删工程 {}", project.getId());
             remove(project.getId());
-            LOGGER.info("ProjectManager: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
+            LOGGER.info("ProjectServerHelper: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
         }
     }
 
@@ -174,36 +175,46 @@ public final class ProjectManager
         return best;
     }
 
+    // 获取玩家附近指定范围内的工程快照（客户端 HUD 查询用）
+    public static ProjectHudPayload getNearby(ServerPlayer player, int range)
+    {
+        List<ProjectHudPayload.Entry> list = new ArrayList<>();
+        int rangeSq = range * range;
+        BlockPos playerPos = player.blockPosition();
+
+        for (ProjectBase project : PROJECTS.values())
+        {
+            if (project.isCompleted()) continue;
+            if (playerPos.distSqr(project.getPosition()) <= rangeSq)
+            {
+                list.add(ProjectHudPayload.Entry.from(project));
+            }
+        }
+        return new ProjectHudPayload(list);
+    }
+
     // ===================== 周期检查 =====================
 
-    // 每 tick 调用（由 MaidTickEvent 驱动），内部按 CHECK_INTERVAL 实际执行
+    // 每 tick 调用（由 ServerTickEvent.Post 驱动），内部按 CHECK_INTERVAL 实际执行
     // 检查内容：懒加载 SavedData → loaded 跳过 → 空洞检测 → 完成移除 → 参与者清理
-    public static void tick(ServerLevel level)
+    @SubscribeEvent
+    public static void tick(ServerTickEvent.Post event)
     {
         // ====== 1. 懒加载 SavedData ======
         if (!dataLoaded)
         {
-            ensureLoaded(level);
+            ensureLoaded();
         }
 
-        // ====== 2. HUD 同步（每 tick 检查） ======
-        // 定期：HUD_SYNC_INTERVAL(10) tick / 强制：execute() 用 requestHudSync() 标记
-        hudSyncCounter++;
-        if (hudSyncCounter >= MaidMoreWorkConfig.HUD_SYNC_INTERVAL || hudForceSync)
-        {
-            hudSyncCounter = 0;
-            hudForceSync = false;
-            syncHudToPlayers(level);
-        }
-
-        // ====== 3. 工程定期检查（每 60 tick 一次） ======
+        // ====== 2. 工程定期检查（每 60 tick 一次） ======
         tickCounter++;
         if (tickCounter < CHECK_INTERVAL) return;
         tickCounter = 0;
 
-        LOGGER.info("ProjectManager: tick checking {} projects", PROJECTS.size());
+        LOGGER.info("ProjectServerHelper: tick checking {} projects", PROJECTS.size());
 
         // ====== 4. 遍历工程：空洞检测 → 完成移除 → 参与者清理 ======
+        MinecraftServer server = event.getServer();
         Iterator<Map.Entry<UUID, ProjectBase>> it = PROJECTS.entrySet().iterator();
         while (it.hasNext())
         {
@@ -216,6 +227,9 @@ public final class ProjectManager
                 continue;
             }
 
+            ServerLevel level = project.resolveLevel(server);
+            if (level == null) continue;
+
             // 4b. 缓存空洞检测（CountingProject.tick 中调用 rebuild）
             project.tick(level);
 
@@ -227,13 +241,10 @@ public final class ProjectManager
         }
 
         // ====== 5. 遍历后收尾 ======
-        // 本轮可能清理了参与者，标记下轮 HUD 立即同步
-        requestHudSync();
-
         // 脏数据同步到 SavedData
         if (dataDirty)
         {
-            syncToData(level);
+            syncToData();
             dataDirty = false;
         }
     }
@@ -243,44 +254,59 @@ public final class ProjectManager
     // 是否已从 SavedData 加载过
     private static boolean dataLoaded = false;
 
-    // 懒加载：从 SavedData 恢复工程到内存缓存
-    private static void ensureLoaded(ServerLevel level)
+    // 懒加载：遍历所有维度，从 SavedData 恢复工程到内存缓存
+    private static void ensureLoaded()
     {
         if (dataLoaded) return;
         dataLoaded = true;
+        PROJECTS.clear();
         try
         {
-            ProjectData data = level.getDataStorage().computeIfAbsent(ProjectData.TYPE);
-            data.load();
-            LOGGER.info("ProjectManager: loaded from SavedData, {} projects", PROJECTS.size());
+            MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+            if (server != null)
+            {
+                for (ServerLevel level : server.getAllLevels())
+                {
+                    ProjectData data = level.getDataStorage().computeIfAbsent(ProjectData.TYPE);
+                    data.load();
+                }
+            }
+            LOGGER.info("ProjectServerHelper: loaded from SavedData, {} projects", PROJECTS.size());
         }
         catch (Exception e)
         {
-            LOGGER.error("ProjectManager: failed to load from SavedData", e);
+            LOGGER.error("ProjectServerHelper: failed to load from SavedData", e);
         }
     }
 
     // 从 ProjectData 加载工程（由 ProjectData.load() 调用）
     public static void loadFromData(ProjectData data)
     {
-        PROJECTS.clear();
         for (ProjectBase project : data.getProjects())
         {
             PROJECTS.put(project.getId(), project);
+            claimPositions(project);
         }
     }
 
-    // 将内存工程同步到 SavedData 并标记脏
-    private static void syncToData(ServerLevel level)
+    // 将内存工程同步到所有维度的 SavedData
+    private static void syncToData()
     {
         try
         {
-            ProjectData data = level.getDataStorage().computeIfAbsent(ProjectData.TYPE);
-            data.sync(PROJECTS);
+            MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+            if (server != null)
+            {
+                for (ServerLevel level : server.getAllLevels())
+                {
+                    ProjectData data = level.getDataStorage().computeIfAbsent(ProjectData.TYPE);
+                    data.sync(PROJECTS);
+                }
+            }
         }
         catch (Exception e)
         {
-            LOGGER.error("ProjectManager: failed to sync to SavedData", e);
+            LOGGER.error("ProjectServerHelper: failed to sync to SavedData", e);
         }
     }
 
@@ -294,6 +320,7 @@ public final class ProjectManager
         if (!project.isCompleted()) return false;
 
         project.onComplete(level);
+        LOGGER.info("ProjectServerHelper: DIAG checkCompleted 即将删工程 {}", project.getId());
         remove(project, it);
         return true;
     }
@@ -316,7 +343,7 @@ public final class ProjectManager
         // 2. 逐一清退
         for (UUID maidUuid : toRemove)
         {
-            LOGGER.info("ProjectManager: releasing inactive maid {} from project {}",
+            LOGGER.info("ProjectServerHelper: releasing inactive maid {} from project {}",
                     maidUuid, project.getId());
             project.release(maidUuid);
         }
@@ -324,6 +351,7 @@ public final class ProjectManager
         // 3. 参与者全部清空 → 移除孤儿工程
         if (project.getParticipants().isEmpty())
         {
+            LOGGER.info("ProjectServerHelper: DIAG cleanInactive 即将删工程 {}", project.getId());
             remove(project, it);
         }
     }
@@ -335,8 +363,7 @@ public final class ProjectManager
         releasePositions(project);
         it.remove();
         dataDirty = true;
-        hudForceSync = true;
-        LOGGER.info("ProjectManager: project {} removed", project.getId());
+        LOGGER.info("ProjectServerHelper: project {} removed", project.getId());
     }
 
     // ===================== 维度+坐标映射表 =====================
@@ -370,15 +397,6 @@ public final class ProjectManager
         for (BlockPos pos : project.getTargetBlocks())
         {
             posMap.remove(pos, project.getId());
-        }
-    }
-
-    private static void syncHudToPlayers(ServerLevel level)
-    {
-        ProjectHudPayload payload = ProjectHudPayload.buildAll();
-        for (ServerPlayer player : level.players())
-        {
-            PacketDistributor.sendToPlayer(player, payload);
         }
     }
 }

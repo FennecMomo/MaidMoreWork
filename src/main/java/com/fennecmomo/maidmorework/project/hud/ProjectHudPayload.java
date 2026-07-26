@@ -7,7 +7,7 @@ import java.util.UUID;
 import com.fennecmomo.maidmorework.MaidMoreWork;
 import com.fennecmomo.maidmorework.project.CountingProject;
 import com.fennecmomo.maidmorework.project.ProjectBase;
-import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,11 +20,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
 // 工程 HUD 的网络数据包
-// 服务端 ProjectManager.syncHudToPlayers 打包所有活跃工程 → 通过网络发给客户端
-// 客户端 ProjectHudRenderer.sync 接收并缓存数据，在 RenderGuiLayerEvent.Post 渲染面板
+// 服务端 ProjectServerHelper.syncHudToPlayers 打包所有活跃工程 → 通过网络发给客户端
+// 客户端 ProjectClientHelper.sync 接收并缓存数据，在 RenderGuiLayerEvent.Post 渲染面板
 //
 // Entry 是一条工程的摘要信息：UUID、位置、类型、进度、工作量、参与人数、是否完成
-// buildAll 从 ProjectManager 遍历全部工程生成 payload
+// buildAll 从 ProjectServerHelper 遍历全部工程生成 payload
 public record ProjectHudPayload(List<Entry> entries) implements CustomPacketPayload
 {
     private static final Logger LOGGER = LoggerFactory.getLogger("MaidMoreWork");
@@ -76,7 +76,7 @@ public record ProjectHudPayload(List<Entry> entries) implements CustomPacketPayl
     public static ProjectHudPayload buildAll()
     {
         List<Entry> list = new ArrayList<>();
-        for (ProjectBase p : ProjectManager.getAllProjects().values())
+        for (ProjectBase p : ProjectServerHelper.getAllProjects().values())
         {
             list.add(Entry.from(p));
         }

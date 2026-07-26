@@ -12,7 +12,7 @@ import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
 import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.ChoppingProject;
-import com.fennecmomo.maidmorework.project.ProjectManager;
+import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
@@ -37,7 +37,7 @@ import net.neoforged.neoforge.transfer.transaction.Transaction;
 // 2. 导航到树脚附近（2格内）
 // 3. 到达后每 CHOP_INTERVAL tick 调用 project.execute() 推进计数
 // 4. 工程计数达标后 project 自动批量破坏 + 分配掉落物
-// 5. 全部完成后清空 Memory，工程由 ProjectManager 移除
+// 5. 全部完成后清空 Memory，工程由 ProjectServerHelper 移除
 //
 // 树叶由原版自然腐栏机制清理，本行为不管理
 //
@@ -81,7 +81,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
 
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        if (ProjectManager.getAvailableProject(projectUuid, ChoppingProject.class) != null)
+        if (ProjectServerHelper.getAvailableProject(projectUuid, ChoppingProject.class) != null)
         {
             return true;
         }
@@ -90,7 +90,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         Optional<UUID> savedUuid = maid.getData(ModAttachments.PROJECT_UUID_SAVED);
         if (savedUuid.isPresent())
         {
-            ChoppingProject project = ProjectManager.getAvailableProject(savedUuid.get(), ChoppingProject.class);
+            ChoppingProject project = ProjectServerHelper.getAvailableProject(savedUuid.get(), ChoppingProject.class);
             if (project != null)
             {
                 LOGGER.info("ChopBehavior: restored memory from attachment, project={} maid={}",
@@ -139,7 +139,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        ChoppingProject project = ProjectManager.getProject(projectUuid, ChoppingProject.class);
+        ChoppingProject project = ProjectServerHelper.getProject(projectUuid, ChoppingProject.class);
         if (project == null)
         {
             LOGGER.info("ChopBehavior: project not found, finishing maid={}", maid.getId());
@@ -194,7 +194,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 else
                 {
                     LOGGER.info("ChopBehavior: too far and nav failed, roaming away maid={}", maid.getId());
-                    ProjectManager.remove(project.getId());
+                    LOGGER.info("ChopBehavior: DIAG tickNavigate 即将删工程 {}", project.getId());
+                    ProjectServerHelper.remove(project.getId());
                     roaming = true;
                     pickRandomAndMove(maid, level);
                     stopChop(maid);
@@ -273,7 +274,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         if (projectUuid != null)
         {
-            ChoppingProject project = ProjectManager.getProject(projectUuid, ChoppingProject.class);
+            ChoppingProject project = ProjectServerHelper.getProject(projectUuid, ChoppingProject.class);
             if (project != null)
             {
                 project.release(maid.getUUID());
@@ -291,7 +292,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
         if (projectUuid != null)
         {
-            ChoppingProject project = ProjectManager.getProject(projectUuid, ChoppingProject.class);
+            ChoppingProject project = ProjectServerHelper.getProject(projectUuid, ChoppingProject.class);
             if (project != null)
             {
                 project.release(maid.getUUID());

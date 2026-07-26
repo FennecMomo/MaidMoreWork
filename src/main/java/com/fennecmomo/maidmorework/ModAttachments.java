@@ -22,7 +22,7 @@ public class ModAttachments
             DeferredRegister.create(NeoForgeRegistries.ATTACHMENT_TYPES, MaidMoreWork.MODID);
 
     // 工程 UUID 引用持久化（女仆关联的工程实例标识）
-    // 世界重进后通过 ProjectManager.getAvailableProject 重新关联工程
+    // 世界重进后通过 ProjectServerHelper.getAvailableProject 重新关联工程
     public static final DeferredHolder<AttachmentType<?>, AttachmentType<Optional<UUID>>> PROJECT_UUID_SAVED =
             ATTACHMENT_TYPES.register("project_uuid_saved", () ->
                     AttachmentType.<Optional<UUID>>builder(Optional::empty)

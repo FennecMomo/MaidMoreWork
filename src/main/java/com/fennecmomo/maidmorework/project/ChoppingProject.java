@@ -205,7 +205,7 @@ public class ChoppingProject extends CountingProject
 
     // ===================== 完成回调 =====================
 
-    // 工程完成时的清理逻辑（由 ProjectManager 调用）
+    // 工程完成时的清理逻辑（由 ProjectServerHelper 调用）
     // 原木已在 CountingProject.completeTargets 中批量破坏，树叶由原版自然腐栏机制清理
     @Override
     public void onComplete(ServerLevel level)
