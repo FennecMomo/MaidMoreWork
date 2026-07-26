@@ -103,7 +103,6 @@ public abstract class CountingProject extends ProjectBase
         if (targetBlocks.isEmpty())
         {
             LOGGER.info("CountingProject: targetBlocks empty, marking complete project={}", getId());
-            LOGGER.info("CountingProject: DIAG completed入口=目标列表为空 project={}", getId());
             completed = true;
             return false;
         }
@@ -128,7 +127,6 @@ public abstract class CountingProject extends ProjectBase
 
         if (progress >= workload)
         {
-            LOGGER.info("CountingProject: DIAG completed入口=进度达标, progress={}/{} project={}", progress, workload, getId());
             LOGGER.info("CountingProject: progress reached workload, triggering completion project={}", getId());
             completeTargets(level);
             return false;
@@ -152,7 +150,6 @@ public abstract class CountingProject extends ProjectBase
             LOGGER.info("CountingProject: cache gap detected in tick, rebuilding project={}", getId());
             if (!rebuild(level))
             {
-                LOGGER.info("CountingProject: DIAG completed入口=重建失败, 无有效目标 project={}", getId());
                 completed = true;
             }
         }

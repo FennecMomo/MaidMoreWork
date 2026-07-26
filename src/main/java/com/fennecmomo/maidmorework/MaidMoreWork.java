@@ -95,7 +95,6 @@ public class MaidMoreWork
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
-                LOGGER.info("MaidMoreWork: DIAG ToItem event fired, maid={}", e.getMaid().getUUID());
                 ProjectServerHelper.releaseMaid(e.getMaid());
         });
     }

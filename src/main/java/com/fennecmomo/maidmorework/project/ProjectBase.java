@@ -223,18 +223,10 @@ public abstract class ProjectBase
     // 返回 true 表示存在空洞，需调用 rebuild 重建
     protected boolean isCacheStale(ServerLevel level)
     {
-        LOGGER.info("ProjectBase: DIAG isCacheStale 开始扫描, targetBlocks总数={} project={}", targetBlocks.size(), getId());
-        for (BlockPos pos : targetBlocks)
-        {
-            LOGGER.info("ProjectBase: DIAG isCacheStale targetBlock @{} state={} valid={} project={}",
-                    pos.toShortString(), level.getBlockState(pos), isValidTarget(level, pos), getId());
-        }
         for (BlockPos pos : targetBlocks)
         {
             if (!isValidTarget(level, pos))
             {
-                LOGGER.info("ProjectBase: DIAG isCacheStale 发现空洞 @{} 实际方块={} project={}",
-                        pos.toShortString(), level.getBlockState(pos), getId());
                 return true;
             }
         }

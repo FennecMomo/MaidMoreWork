@@ -116,7 +116,8 @@ public class ChopBehavior extends Behavior<EntityMaid>
     protected void start(ServerLevel level, EntityMaid maid, long time)
     {
         LOGGER.info("ChopBehavior START maid={}", maid.getId());
-        MaidBubbleHelper.clearBubble(maid);
+        MaidBubbleHelper.get(maid).clearAll();
+        MaidBubbleHelper.get(maid).clearFloor();
         maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
         if (maid.getNavigation().isInProgress())
         {
@@ -173,7 +174,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
         {
             reachedTree = true;
             maid.getNavigation().stop();
-            MaidBubbleHelper.clearBubble(maid);
             LOGGER.info("ChopBehavior: reached tree base, starting chop maid={}", maid.getId());
             return;
         }
@@ -191,17 +191,10 @@ public class ChopBehavior extends Behavior<EntityMaid>
                     break;
                 }
             }
-            LOGGER.info("ChopBehavior: DIAG navigating to ({}, {}, {}) project={} logs={}",
-                    target.getX() + 0.5, target.getY(), target.getZ() + 0.5,
-                    project.getId(), project.getTargetBlocks());
             boolean moved = maid.getNavigation().moveTo(
                     target.getX() + 0.5, target.getY(),
                     target.getZ() + 0.5, MaidMoreWorkConfig.WALK_SPEED);
-            if (moved)
-            {
-                MaidBubbleHelper.clearBubble(maid);
-            }
-            else
+            if (!moved)
             {
                 if (distSq < MaidMoreWorkConfig.CLOSE_ENOUGH_SQ)
                 {
@@ -211,7 +204,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 else
                 {
                     LOGGER.info("ChopBehavior: too far and nav failed, roaming away maid={}", maid.getId());
-                    LOGGER.info("ChopBehavior: DIAG tickNavigate 即将删工程 {}", project.getId());
                     ProjectServerHelper.remove(project.getId());
                     roaming = true;
                     pickRandomAndMove(maid, level);

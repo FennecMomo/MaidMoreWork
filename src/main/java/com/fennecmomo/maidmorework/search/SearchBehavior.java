@@ -74,9 +74,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // 静默倒计时（螺旋耗尽后等待一段时间再试）
     private int silenceTicks = 0;
 
-    // 诊断：首帧打印家园状态
-    private boolean diagLogged = false;
-
     // ===================== 构造器 =====================
 
     // scanAction: 单点检索方法，判断当前点是否为目标，返回 true/false
@@ -155,7 +152,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         LOGGER.info("SearchBehavior START maid={}", maid.getId());
         silenceTicks = 0;
-        MaidBubbleHelper.clearBubble(maid);
+        MaidBubbleHelper.get(maid).clearAll();
 
         // 前置检索：优先查找孤儿工程（如无人接手的砍树工程）
         if (preSearch != null && preSearch.search(level, maid.blockPosition(), maid))
@@ -209,7 +206,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
             {
                 progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]";
             }
-            MaidBubbleHelper.updateBubble(maid, "搜索" + target + "中..." + progress);
+            MaidBubbleHelper.get(maid).setFloor("搜索" + target + "中..." + progress);
         }
 
         // 螺旋范围耗尽，根据模式选择后续策略
@@ -246,7 +243,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
-            MaidBubbleHelper.showFollowWarn(maid);
+            MaidBubbleHelper.get(maid).setFollowWarn(maid);
             silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
             return true;
         }
@@ -352,20 +349,6 @@ public class SearchBehavior extends Behavior<EntityMaid>
         boolean restricted = useHomeRestriction && hasHome
                 && spiralOrigin != null && maid.isWithinHome(spiralOrigin);
 
-        if (!diagLogged)
-        {
-            diagLogged = true;
-            LOGGER.info("SearchBehavior: DIAG expandSpiral first call — useHomeRestriction={} hasHome={} homePos={} homeRadius={} origin={} originWithinHome={} restricted={} point={} isWithinHome={} maid={}",
-                    useHomeRestriction, hasHome,
-                    hasHome ? maid.getHomePosition() : "N/A",
-                    hasHome ? maid.getHomeRadius() : -1,
-                    spiralOrigin,
-                    hasHome && spiralOrigin != null ? maid.isWithinHome(spiralOrigin) : "N/A",
-                    restricted, point,
-                    hasHome ? maid.isWithinHome(point) : "N/A",
-                    maid.getId());
-        }
-
         for (int dx = -1; dx <= 1; dx++)
         {
             for (int dy = -1; dy <= 1; dy++)
@@ -411,7 +394,9 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
         String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
-        MaidBubbleHelper.showBubble(maid, "家园没有可用" + target + "(扫" + scanned + "拦" + filtered + ")", MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
+        MaidBubbleHelper helper = MaidBubbleHelper.get(maid);
+        helper.clearFloor();
+        helper.set("家园没有可用" + target + "(扫" + scanned + "拦" + filtered + ")", -999);
         LOGGER.info("SearchBehavior: home range exhausted, silencing for {} ticks maid={}",
                 MaidMoreWorkConfig.SILENCE_TICKS, maid.getId());
     }
@@ -451,6 +436,5 @@ public class SearchBehavior extends Behavior<EntityMaid>
         spiralOrigin = null;
         spiralTotalEstimate = 0;
         silenceTicks = 0;
-        diagLogged = false;
     }
 }

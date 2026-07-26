@@ -90,7 +90,6 @@ public final class ProjectServerHelper
     public static void releaseMaid(EntityMaid maid)
     {
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        LOGGER.info("ProjectServerHelper: DIAG releaseMaid called, maid={} projectUuid={}", maid.getUUID(), projectUuid);
         if (projectUuid == null) return;
 
         ProjectBase project = PROJECTS.get(projectUuid);
@@ -107,7 +106,6 @@ public final class ProjectServerHelper
 
         if (project.getParticipants().isEmpty())
         {
-            LOGGER.info("ProjectServerHelper: DIAG releaseMaid 即将删工程 {}", project.getId());
             remove(project.getId());
             LOGGER.info("ProjectServerHelper: releaseMaid removed orphan project {} maid={}", project.getId(), maid.getUUID());
         }
@@ -320,7 +318,6 @@ public final class ProjectServerHelper
         if (!project.isCompleted()) return false;
 
         project.onComplete(level);
-        LOGGER.info("ProjectServerHelper: DIAG checkCompleted 即将删工程 {}", project.getId());
         remove(project, it);
         return true;
     }
@@ -351,7 +348,6 @@ public final class ProjectServerHelper
         // 3. 参与者全部清空 → 移除孤儿工程
         if (project.getParticipants().isEmpty())
         {
-            LOGGER.info("ProjectServerHelper: DIAG cleanInactive 即将删工程 {}", project.getId());
             remove(project, it);
         }
     }
