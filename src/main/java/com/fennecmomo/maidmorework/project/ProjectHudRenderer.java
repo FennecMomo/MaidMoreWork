@@ -86,7 +86,7 @@ public final class ProjectHudRenderer
         List<Component> lines = new ArrayList<>();
         lines.add(Component.literal(e.type()));
 
-        int completed = (int) Math.round(e.progress() * e.workload());
+        int completed = (int) Math.round(e.progress());
         lines.add(Component.literal(completed + "/" + e.workload()));
 
         if (e.participantCount() > 0)

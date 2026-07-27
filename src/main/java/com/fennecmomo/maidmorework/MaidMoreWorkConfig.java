@@ -49,5 +49,5 @@ public final class MaidMoreWorkConfig
     public static final double PANEL_TOWARD_PLAYER_OFFSET = 1.0;
     public static final int PANEL_SEE_THROUGH_LIGHT = 0xF000F0;
     // 工程 HUD 显示距离（格），玩家超过此距离不渲染面板
-    public static final int HUD_RENDER_DISTANCE = 32;
+    public static final int HUD_RENDER_DISTANCE = 6;
 }
