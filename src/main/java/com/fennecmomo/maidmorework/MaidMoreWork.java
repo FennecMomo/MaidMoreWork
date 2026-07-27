@@ -6,6 +6,8 @@ import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
 import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterEditHud;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
@@ -82,6 +84,11 @@ public class MaidMoreWork
                     ProjectHudPayload.TYPE,
                     ProjectHudPayload.STREAM_CODEC,
                     (payload, context) -> ProjectClientHelper.sync(payload)
+            );
+            registrar.playToClient(
+                    ProjectCenterEditPayload.TYPE,
+                    ProjectCenterEditPayload.STREAM_CODEC,
+                    (payload, context) -> ProjectCenterEditHud.open(payload)
             );
             registrar.playToServer(
                     ProjectHudQueryPayload.TYPE,

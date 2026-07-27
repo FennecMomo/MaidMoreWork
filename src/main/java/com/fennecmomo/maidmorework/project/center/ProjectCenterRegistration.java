@@ -25,7 +25,6 @@ public class ProjectCenterRegistration
             BLOCKS.registerBlock("project_center",
                     properties -> new ProjectCenterBlock(properties),
                     p -> p.noOcclusion()
-                            .noCollision()
                             .instabreak()
                             .strength(-1.0F)
                             .noLootTable()

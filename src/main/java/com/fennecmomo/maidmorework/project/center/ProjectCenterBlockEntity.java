@@ -1,5 +1,7 @@
 package com.fennecmomo.maidmorework.project.center;
 
+import com.fennecmomo.maidmorework.lib.region.IRegionalManager;
+import com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -8,7 +10,7 @@ import net.minecraft.world.level.storage.ValueOutput;
 
 import java.util.UUID;
 
-public class ProjectCenterBlockEntity extends BlockEntity
+public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalManager
 {
     private long idMost = 0L;
     private long idLeast = 0L;
@@ -17,6 +19,10 @@ public class ProjectCenterBlockEntity extends BlockEntity
 
     private BlockPos cornerNW = BlockPos.ZERO;
     private BlockPos cornerSE = BlockPos.ZERO;
+    private int radius = 5;
+    private int anchor = 1; // 0=top, 1=center, 2=bottom
+
+    private boolean boundaryVisible = true;
 
     public ProjectCenterBlockEntity(BlockPos pos, BlockState state)
     {
@@ -28,7 +34,8 @@ public class ProjectCenterBlockEntity extends BlockEntity
         return idMost != 0L || idLeast != 0L;
     }
 
-    public UUID getInstanceId()
+    @Override
+    public UUID getId()
     {
         if (!hasInstance()) return null;
         return new UUID(idMost, idLeast);
@@ -39,25 +46,73 @@ public class ProjectCenterBlockEntity extends BlockEntity
         return new UUID(ownerMost, ownerLeast);
     }
 
-    public BlockPos getCornerNW() { return cornerNW; }
-    public BlockPos getCornerSE() { return cornerSE; }
+    @Override
+    public BlockPos getMinCorner() { return cornerNW; }
 
-    public boolean contains(BlockPos pos)
+    @Override
+    public BlockPos getMaxCorner() { return cornerSE; }
+
+    @Override
+    public void setBoundaryVisible(boolean visible)
     {
-        return pos.getX() >= cornerNW.getX() && pos.getX() <= cornerSE.getX()
-                && pos.getY() >= cornerNW.getY() && pos.getY() <= cornerSE.getY()
-                && pos.getZ() >= cornerNW.getZ() && pos.getZ() <= cornerSE.getZ();
+        this.boundaryVisible = visible;
+        setChanged();
     }
 
-    public void setInstanceData(UUID id, UUID owner, BlockPos nw, BlockPos se)
+    @Override
+    public boolean isBoundaryVisible()
+    {
+        return boundaryVisible;
+    }
+
+    public void setInstanceData(UUID id, UUID owner, int radius, BlockPos nw, BlockPos se)
     {
         this.idMost = id.getMostSignificantBits();
         this.idLeast = id.getLeastSignificantBits();
         this.ownerMost = owner.getMostSignificantBits();
         this.ownerLeast = owner.getLeastSignificantBits();
+        this.radius = radius;
         this.cornerNW = nw;
         this.cornerSE = se;
+        this.boundaryVisible = true;
         setChanged();
+    }
+
+    public int getRadius() { return radius; }
+    public int getAnchor() { return anchor; }
+
+    public void setRadius(int radius)
+    {
+        this.radius = radius;
+        recalcCorners();
+        setChanged();
+    }
+
+    public void setAnchor(int anchor)
+    {
+        this.anchor = anchor;
+        recalcCorners();
+        setChanged();
+    }
+
+    private void recalcCorners()
+    {
+        BlockPos center = getBlockPos();
+        int r = radius;
+        int minY = switch (anchor)
+        {
+            case 0 -> center.getY() - 2 * r;  // top: block at top, area extends downward
+            case 2 -> center.getY();           // bottom: block at bottom, area extends upward
+            default -> center.getY() - r;       // center
+        };
+        int maxY = switch (anchor)
+        {
+            case 0 -> center.getY();           // top
+            case 2 -> center.getY() + 2 * r;   // bottom
+            default -> center.getY() + r;       // center
+        };
+        this.cornerNW = new BlockPos(center.getX() - r, minY, center.getZ() - r);
+        this.cornerSE = new BlockPos(center.getX() + r, maxY, center.getZ() + r);
     }
 
     @Override
@@ -76,20 +131,37 @@ public class ProjectCenterBlockEntity extends BlockEntity
                 input.getIntOr("seX", 0),
                 input.getIntOr("seY", 0),
                 input.getIntOr("seZ", 0));
+        boundaryVisible = input.getBooleanOr("boundaryVisible", true);
+        radius = input.getIntOr("radius", 5);
+        anchor = input.getIntOr("anchor", 1);
     }
 
     @Override
     public void onLoad()
     {
         super.onLoad();
-        if (level != null && !level.isClientSide() && hasInstance())
+        if (hasInstance())
         {
-            UUID id = getInstanceId();
-            if (ProjectCenterInstanceManager.get(level, id) == null)
+            RegionalManagerRegistry.register(this);
+            if (level != null && !level.isClientSide())
             {
-                ProjectCenterInstance inst = new ProjectCenterInstance(id, getOwner(), cornerNW, cornerSE);
-                ProjectCenterInstanceManager.put(level, inst);
+                UUID id = getId();
+                if (ProjectCenterInstanceManager.get(level, id) == null)
+                {
+                    ProjectCenterInstance inst = new ProjectCenterInstance(id, getOwner(), cornerNW, cornerSE);
+                    ProjectCenterInstanceManager.put(level, inst);
+                }
             }
+        }
+    }
+
+    @Override
+    public void onChunkUnloaded()
+    {
+        super.onChunkUnloaded();
+        if (hasInstance())
+        {
+            RegionalManagerRegistry.unregister(getId());
         }
     }
 
@@ -109,6 +181,9 @@ public class ProjectCenterBlockEntity extends BlockEntity
             output.putInt("seX", cornerSE.getX());
             output.putInt("seY", cornerSE.getY());
             output.putInt("seZ", cornerSE.getZ());
+            output.putBoolean("boundaryVisible", boundaryVisible);
+            output.putInt("radius", radius);
+            output.putInt("anchor", anchor);
         }
     }
 }

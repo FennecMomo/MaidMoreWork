@@ -18,23 +18,23 @@ public class ProjectCenterMarkerItem extends Item
     public static boolean isBound(ItemStack stack)
     {
         CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-        return tag.contains("centerIdMost");
+        return tag.contains("regionIdMost");
     }
 
     public static UUID getBoundId(ItemStack stack)
     {
         if (!isBound(stack)) return null;
         CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-        return new UUID(tag.getLong("centerIdMost").orElse(0L),
-                        tag.getLong("centerIdLeast").orElse(0L));
+        return new UUID(tag.getLong("regionIdMost").orElse(0L),
+                        tag.getLong("regionIdLeast").orElse(0L));
     }
 
     public static void bind(ItemStack stack, UUID id)
     {
         CustomData.update(DataComponents.CUSTOM_DATA, stack, tag ->
         {
-            tag.putLong("centerIdMost", id.getMostSignificantBits());
-            tag.putLong("centerIdLeast", id.getLeastSignificantBits());
+            tag.putLong("regionIdMost", id.getMostSignificantBits());
+            tag.putLong("regionIdLeast", id.getLeastSignificantBits());
         });
     }
 
@@ -42,8 +42,8 @@ public class ProjectCenterMarkerItem extends Item
     {
         CustomData.update(DataComponents.CUSTOM_DATA, stack, tag ->
         {
-            tag.remove("centerIdMost");
-            tag.remove("centerIdLeast");
+            tag.remove("regionIdMost");
+            tag.remove("regionIdLeast");
         });
     }
 }
