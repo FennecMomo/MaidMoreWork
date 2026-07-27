@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.project.center;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
+import com.fennecmomo.maidmorework.lib.render.WireframeBoxRenderer;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Camera;
@@ -64,53 +65,20 @@ public final class ProjectCenterBoundaryRenderer
             double cz = inst.center().getZ() + 0.5;
             if ((cx - cam.x) * (cx - cam.x) + (cy - cam.y) * (cy - cam.y) + (cz - cam.z) * (cz - cam.z) > RENDER_DIST_SQ) continue;
 
-            float x0 = inst.minX();
-            float y0 = inst.minY();
-            float z0 = inst.minZ();
-            float x1 = inst.maxX() + 1.0f;
-            float y1 = inst.maxY() + 1.0f;
-            float z1 = inst.maxZ() + 1.0f;
+            double x0 = inst.minX();
+            double y0 = inst.minY();
+            double z0 = inst.minZ();
+            double x1 = inst.maxX() + 1.0;
+            double y1 = inst.maxY() + 1.0;
+            double z1 = inst.maxZ() + 1.0;
 
             float[] c = (boundId != null && boundId.equals(inst.getId())) ? COLOR_BOUND : COLOR_DEFAULT;
 
-            renderWireframeBox(vc, m, x0, y0, z0, x1, y1, z1, c[0], c[1], c[2], c[3]);
+            WireframeBoxRenderer.render(vc, m, x0, y0, z0, x1, y1, z1, c[0], c[1], c[2], c[3]);
         }
 
         buf.endBatch(renderType);
         ps.popPose();
-    }
-
-    private static void renderWireframeBox(VertexConsumer vc, Matrix4f m,
-                                            float x0, float y0, float z0,
-                                            float x1, float y1, float z1,
-                                            float r, float g, float b, float a)
-    {
-        // Bottom face (y = y0)
-        line(vc, m, x0, y0, z0, x1, y0, z0, r, g, b, a);
-        line(vc, m, x1, y0, z0, x1, y0, z1, r, g, b, a);
-        line(vc, m, x1, y0, z1, x0, y0, z1, r, g, b, a);
-        line(vc, m, x0, y0, z1, x0, y0, z0, r, g, b, a);
-
-        // Top face (y = y1)
-        line(vc, m, x0, y1, z0, x1, y1, z0, r, g, b, a);
-        line(vc, m, x1, y1, z0, x1, y1, z1, r, g, b, a);
-        line(vc, m, x1, y1, z1, x0, y1, z1, r, g, b, a);
-        line(vc, m, x0, y1, z1, x0, y1, z0, r, g, b, a);
-
-        // Vertical pillars
-        line(vc, m, x0, y0, z0, x0, y1, z0, r, g, b, a);
-        line(vc, m, x1, y0, z0, x1, y1, z0, r, g, b, a);
-        line(vc, m, x1, y0, z1, x1, y1, z1, r, g, b, a);
-        line(vc, m, x0, y0, z1, x0, y1, z1, r, g, b, a);
-    }
-
-    private static void line(VertexConsumer vc, Matrix4f m,
-                              float x0, float y0, float z0,
-                              float x1, float y1, float z1,
-                              float r, float g, float b, float a)
-    {
-        vc.addVertex(m, x0, y0, z0).setColor(r, g, b, a).setLineWidth(5).setNormal(0, 1, 0);
-        vc.addVertex(m, x1, y1, z1).setColor(r, g, b, a).setLineWidth(5).setNormal(0, 1, 0);
     }
 
     private static boolean isHoldingMarker(ItemStack stack)

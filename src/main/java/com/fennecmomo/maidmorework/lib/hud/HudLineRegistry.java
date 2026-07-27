@@ -1,12 +1,11 @@
-package com.fennecmomo.maidmorework.project.hud;
+package com.fennecmomo.maidmorework.lib.hud;
+
+import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
+import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import net.minecraft.network.chat.Component;
-
-// HUD 行注册中心：存储所有可用的面板行模板
-// 玩家可在配置中选择启用哪些行（后续实现配置 UI）
 public final class HudLineRegistry
 {
     private static final List<IHudLine> LINES = new ArrayList<>();
@@ -31,7 +30,6 @@ public final class HudLineRegistry
 
     public static List<IHudLine> getEnabled()
     {
-        // 后续从配置读取，目前全默认启用
         List<IHudLine> enabled = new ArrayList<>();
         for (IHudLine line : LINES)
         {
@@ -42,8 +40,6 @@ public final class HudLineRegistry
         }
         return enabled;
     }
-
-    // ===================== 内置实现 =====================
 
     public static class ProgressLine implements IHudLine
     {
@@ -97,7 +93,7 @@ public final class HudLineRegistry
         @Override
         public Component format(ProjectHudPayload.Entry e)
         {
-            return Component.literal("—");  // 后续接入实时速率计算
+            return Component.literal("—");
         }
     }
 }
