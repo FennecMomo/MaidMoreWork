@@ -190,15 +190,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         if (spiralQueue != null && !spiralQueue.isEmpty() && spiralTotalEstimate > 0)
         {
             String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
-            String progress;
-            if (spiralFilteredCount > 0)
-            {
-                progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]拦" + spiralFilteredCount;
-            }
-            else
-            {
-                progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]";
-            }
+            String progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]";
             MaidBubbleHelper.get(maid).setFloor("搜索" + target + "中..." + progress);
         }
 
@@ -382,7 +374,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
         String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
         MaidBubbleHelper helper = MaidBubbleHelper.get(maid);
         helper.clearFloor();
-        helper.set("家园没有可用" + target + "(扫" + scanned + "拦" + filtered + ")", -999);
+        helper.set("家园没有可用" + target, -999);
     }
 
     // 非限制模式：选随机方向导航到 20~35 格外的某个点
