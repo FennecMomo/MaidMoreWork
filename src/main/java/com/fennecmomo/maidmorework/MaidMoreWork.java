@@ -5,6 +5,8 @@ import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
 import com.fennecmomo.maidmorework.project.ProjectServerHelper;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
@@ -50,6 +52,8 @@ public class MaidMoreWork
                     output.accept(MineRegistration.MINE_BLOCK.get());
                     output.accept(MineRegistration.MINE_MARKER.get());
                     output.accept(MineRegistration.FLUID_BOTTLE.get());
+                    output.accept(ProjectCenterRegistration.PROJECT_CENTER_BLOCK.get());
+                    output.accept(ProjectCenterRegistration.PROJECT_CENTER_MARKER.get());
                 })
                 .build());
     }
@@ -65,6 +69,9 @@ public class MaidMoreWork
         MineRegistration.ITEMS.register(modBus);
         FluidBottleItem.DATA_COMPONENTS.register(modBus);
         MineRegistration.MENUS.register(modBus);
+        ProjectCenterRegistration.BLOCKS.register(modBus);
+        ProjectCenterRegistration.BLOCK_ENTITIES.register(modBus);
+        ProjectCenterRegistration.ITEMS.register(modBus);
         CREATIVE_TABS.register(modBus);
 
         // 网络包注册
@@ -88,6 +95,7 @@ public class MaidMoreWork
         });
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener(ProjectCenterCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
