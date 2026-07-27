@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "down": "maidmorework:block/project_center_top",
+    "up": "maidmorework:block/project_center_top",
+    "north": "maidmorework:block/project_center_side",
+    "south": "maidmorework:block/project_center_side",
+    "east": "maidmorework:block/project_center_side",
+    "west": "maidmorework:block/project_center_side",
+    "particle": "maidmorework:block/project_center_side"
+  }
+}

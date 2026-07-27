@@ -3,6 +3,7 @@ package com.fennecmomo.maidmorework.project.center;
 import com.fennecmomo.maidmorework.MaidMoreWork;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -29,6 +30,9 @@ public class ProjectCenterRegistration
                             .strength(-1.0F)
                             .noLootTable()
             );
+
+    public static final DeferredHolder<Item, BlockItem> PROJECT_CENTER_BLOCK_ITEM =
+            ITEMS.registerSimpleBlockItem(PROJECT_CENTER_BLOCK);
 
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<ProjectCenterBlockEntity>> PROJECT_CENTER_BLOCK_ENTITY =
             BLOCK_ENTITIES.register("project_center",

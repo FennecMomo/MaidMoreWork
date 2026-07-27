@@ -69,11 +69,12 @@ public class ProjectCenterInstance
         }
         int minX = Math.min(clicked1.getX(), clicked2.getX());
         int maxX = minX + odd(clicked1.getX(), clicked2.getX());
-        int centerY = (clicked1.getY() + clicked2.getY()) / 2;
+        int minY = Math.min(clicked1.getY(), clicked2.getY());
+        int maxY = Math.max(clicked1.getY(), clicked2.getY());
         int minZ = Math.min(clicked1.getZ(), clicked2.getZ());
         int maxZ = minZ + odd(clicked1.getZ(), clicked2.getZ());
-        this.posNW = new BlockPos(minX, centerY, minZ);
-        this.posSE = new BlockPos(maxX, centerY, maxZ);
+        this.posNW = new BlockPos(minX, minY, minZ);
+        this.posSE = new BlockPos(maxX, maxY, maxZ);
     }
 
     private static int odd(int a, int b)

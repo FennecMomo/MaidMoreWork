@@ -106,7 +106,7 @@ public class ProjectCenterCommand
         ProjectCenterInstance inst = ProjectCenterInstanceManager.get(level, id);
         if (inst == null) return 0;
 
-        BlockPos oldCenter = inst.center().above();
+        BlockPos oldCenter = inst.center();
         if (level.getBlockEntity(oldCenter) instanceof ProjectCenterBlockEntity cbe
                 && cbe.getInstanceId() != null && cbe.getInstanceId().equals(id))
         {

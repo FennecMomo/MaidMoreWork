@@ -149,7 +149,6 @@ public class ProjectCenterMarkerEventHandler
         if (!bound)
         {
             ProjectCenterInstance inst = ProjectCenterInstanceManager.create(level, owner, pos);
-            inst.updateHeights(player.blockPosition().above().getY());
             ProjectCenterMarkerItem.bind(stack, inst.getId());
             player.sendSystemMessage(Component.literal("§a角1已设置: " + pos.toShortString()));
             level.playSound(null, pos, SoundEvents.STONE_PLACE, SoundSource.PLAYERS, 0.5f, 1.0f);
@@ -162,12 +161,9 @@ public class ProjectCenterMarkerEventHandler
         {
             inst = ProjectCenterInstanceManager.create(level, owner, pos);
             ProjectCenterMarkerItem.bind(stack, inst.getId());
-            inst.updateHeights(player.blockPosition().above().getY());
             player.sendSystemMessage(Component.literal("§e工程中心实例已丢失，已重新创建"));
             return;
         }
-
-        inst.updateHeights(player.blockPosition().above().getY());
 
         if (!inst.isComplete())
         {

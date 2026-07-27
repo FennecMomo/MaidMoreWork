@@ -79,6 +79,21 @@ public class ProjectCenterBlockEntity extends BlockEntity
     }
 
     @Override
+    public void onLoad()
+    {
+        super.onLoad();
+        if (level != null && !level.isClientSide() && hasInstance())
+        {
+            UUID id = getInstanceId();
+            if (ProjectCenterInstanceManager.get(level, id) == null)
+            {
+                ProjectCenterInstance inst = new ProjectCenterInstance(id, getOwner(), cornerNW, cornerSE);
+                ProjectCenterInstanceManager.put(level, inst);
+            }
+        }
+    }
+
+    @Override
     protected void saveAdditional(ValueOutput output)
     {
         super.saveAdditional(output);
