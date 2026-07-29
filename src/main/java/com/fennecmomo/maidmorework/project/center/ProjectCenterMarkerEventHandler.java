@@ -23,6 +23,8 @@ public class ProjectCenterMarkerEventHandler
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event)
     {
+        if (event.getLevel().isClientSide()) return;
+
         Player player = event.getEntity();
         ItemStack stack = player.getMainHandItem();
 

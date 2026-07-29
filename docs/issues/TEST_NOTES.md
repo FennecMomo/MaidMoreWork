@@ -85,3 +85,11 @@
 | 9 | drift/close_enough 振荡死锁 | 统一 CLOSE_ENOUGH_SQ |
 | 10 | HUD 网络同步延迟 | counter 独立于 CHECK_INTERVAL |
 | 11 | 孤儿工程 HUD 残留 | cleanInactiveParticipants 衔接 removeProject |
+
+## 工程中心自测反馈 (2026-07-29)
+
+| # | 问题 | 说明 |
+|---|------|------|
+| 1 | 激活面板未显示图标和介绍 | ActivationHud 当前只渲染 displayName 和 description 文本，没有渲染 IProjectType.icon() |
+| 2 | 类型切换按钮未做边界禁用 | 只有1个类型时，左/右按钮应置为禁用状态（首个时左禁用，末个时右禁用），当前所有状态均可点击，末个点右会回到首个 |
+| 3 | 右键方块一律打开编辑面板 | 之前逻辑：标记工具右键打开编辑面板，其他情况右键输出聊天栏信息；现在 useWithoutItem 对所有右键都直接发 Payload 打开面板

@@ -16,6 +16,8 @@ public class ProjectCenterActivationHud extends Screen
     private final UUID centerId;
     private List<IProjectType> types;
     private int selectedIndex = 0;
+    private Button leftBtn;
+    private Button rightBtn;
 
     public static void open(ProjectCenterEditPayload payload)
     {
@@ -39,10 +41,10 @@ public class ProjectCenterActivationHud extends Screen
 
         int cx = width / 2;
 
-        addRenderableWidget(Button.builder(Component.literal("<"), b -> cycle(-1))
+        leftBtn = addRenderableWidget(Button.builder(Component.literal("<"), b -> cycle(-1))
                 .pos(cx - 52, 28).size(20, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal(">"), b -> cycle(1))
+        rightBtn = addRenderableWidget(Button.builder(Component.literal(">"), b -> cycle(1))
                 .pos(cx + 32, 28).size(20, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("取消"), b -> onClose())
@@ -50,12 +52,21 @@ public class ProjectCenterActivationHud extends Screen
 
         addRenderableWidget(Button.builder(Component.literal("确认"), b -> onConfirm())
                 .pos(cx + 5, 130).size(50, 20).build());
+
+        updateButtonStates();
     }
 
     private void cycle(int delta)
     {
         if (types.isEmpty()) return;
         selectedIndex = (selectedIndex + delta + types.size()) % types.size();
+        updateButtonStates();
+    }
+
+    private void updateButtonStates()
+    {
+        if (leftBtn != null) leftBtn.active = selectedIndex != 0;
+        if (rightBtn != null) rightBtn.active = selectedIndex != types.size() - 1;
     }
 
     private void onConfirm()
@@ -73,16 +84,16 @@ public class ProjectCenterActivationHud extends Screen
         super.extractRenderState(g, mx, my, pt);
         if (types.isEmpty())
         {
-            int cx = width / 2;
-            g.centeredText(font, Component.literal("暂无可用工程类型"), cx, 50, 0xFF5555);
             return;
         }
 
         IProjectType type = types.get(selectedIndex);
         int cx = width / 2;
 
-        g.centeredText(font, type.displayName(), cx, 35, 0xFFFFFF);
-        g.centeredText(font, type.description(), cx, 55, 0xAAAAAA);
+        g.item(type.icon(), cx - 10, 23);
+
+        g.centeredText(font, type.displayName(), cx, 52, 0xFFFFFF);
+        g.centeredText(font, type.description(), cx, 70, 0xCCCCCC);
     }
 
     @Override

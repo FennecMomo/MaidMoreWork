@@ -167,6 +167,17 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
     }
 
     @Override
+    public void setRemoved()
+    {
+        super.setRemoved();
+        if (hasInstance() && level != null && !level.isClientSide())
+        {
+            RegionalManagerRegistry.unregister(getId());
+            ProjectCenterInstanceManager.remove(level, getId());
+        }
+    }
+
+    @Override
     public void onChunkUnloaded()
     {
         super.onChunkUnloaded();
