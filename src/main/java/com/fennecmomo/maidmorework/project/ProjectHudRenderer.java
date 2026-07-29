@@ -32,9 +32,6 @@ public final class ProjectHudRenderer
     @SubscribeEvent
     public static void onAfterTranslucentBlocks(RenderLevelStageEvent.AfterTranslucentBlocks event)
     {
-        var data = ProjectClientHelper.DATA;
-        if (data.isEmpty()) return;
-
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
 
@@ -42,8 +39,68 @@ public final class ProjectHudRenderer
         Vec3 camPos = camera.position();
         PoseStack ps = event.getPoseStack();
         MultiBufferSource.BufferSource buf = mc.renderBuffers().bufferSource();
-
         int maxDistSq = MaidMoreWorkConfig.HUD_RENDER_DISTANCE * MaidMoreWorkConfig.HUD_RENDER_DISTANCE;
+
+        renderCenterInfo(mc, ps, buf, camera, camPos, maxDistSq);
+        renderScanProgress(mc, ps, buf, camera, camPos, maxDistSq);
+        renderProjectHuds(mc, ps, buf, camera, camPos, maxDistSq);
+
+        buf.endBatch(RenderTypes.entityTranslucent(WHITE_TEX));
+    }
+
+    private static void renderCenterInfo(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,
+                                          Camera camera, Vec3 camPos, int maxDistSq)
+    {
+        if (ProjectClientHelper.infoCenterPos == null) return;
+        if (ProjectClientHelper.infoCenterPos.distToCenterSqr(camPos) > maxDistSq) return;
+
+        Vec3 worldPos = ProjectClientHelper.infoCenterPos.getCenter().add(0, 1.5, 0);
+        ps.pushPose();
+        ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
+        ps.mulPose(camera.rotation());
+        ps.scale(MaidMoreWorkConfig.PANEL_SCALE, -MaidMoreWorkConfig.PANEL_SCALE, MaidMoreWorkConfig.PANEL_SCALE);
+        ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
+
+        List<Component> lines = new ArrayList<>();
+        lines.add(Component.literal("运行正常"));
+        lines.add(Component.literal(ProjectClientHelper.infoTypeName));
+        lines.add(Component.literal("工程: " + ProjectClientHelper.infoProjectCount));
+        lines.add(Component.literal("女仆: " + ProjectClientHelper.infoMaidCount));
+        BillboardRenderer.render(buf, ps, mc.font, lines,
+                MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
+
+        ps.popPose();
+    }
+
+    private static void renderScanProgress(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,
+                                            Camera camera, Vec3 camPos, int maxDistSq)
+    {
+        if (ProjectClientHelper.scanCenterPos == null || ProjectClientHelper.scanTotal <= 0) return;
+        if (ProjectClientHelper.scanCenterPos.distToCenterSqr(camPos) > maxDistSq) return;
+
+        Vec3 worldPos = ProjectClientHelper.scanCenterPos.getCenter().add(0, 1.5, 0);
+        ps.pushPose();
+        ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
+        ps.mulPose(camera.rotation());
+        ps.scale(MaidMoreWorkConfig.PANEL_SCALE, -MaidMoreWorkConfig.PANEL_SCALE, MaidMoreWorkConfig.PANEL_SCALE);
+        ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
+
+        int pct = (int) (100L * ProjectClientHelper.scanCursor / ProjectClientHelper.scanTotal);
+        List<Component> lines = List.of(
+                Component.literal("刷新中..." + pct + "%"),
+                Component.literal(ProjectClientHelper.scanCursor + " / " + ProjectClientHelper.scanTotal)
+        );
+        BillboardRenderer.render(buf, ps, mc.font, lines,
+                MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
+
+        ps.popPose();
+    }
+
+    private static void renderProjectHuds(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,
+                                           Camera camera, Vec3 camPos, int maxDistSq)
+    {
+        var data = ProjectClientHelper.DATA;
+        if (data.isEmpty()) return;
 
         List<ProjectHudPayload.Entry> sorted = new ArrayList<>(data.values());
         sorted.sort((a, b) -> Double.compare(
@@ -58,7 +115,6 @@ public final class ProjectHudRenderer
             if (pos.distToCenterSqr(camPos) > maxDistSq) continue;
 
             Vec3 worldPos = pos.getCenter().add(0, MaidMoreWorkConfig.PANEL_Y_OFFSET, 0);
-
             ps.pushPose();
             ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
             ps.mulPose(camera.rotation());
@@ -71,8 +127,6 @@ public final class ProjectHudRenderer
 
             ps.popPose();
         }
-
-        buf.endBatch(RenderTypes.entityTranslucent(WHITE_TEX));
     }
 
     private static List<Component> buildLines(ProjectHudPayload.Entry e, Font font)

@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.fennecmomo.maidmorework.lib.region.IRegionalManager;
+import com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
 import com.mojang.serialization.Codec;
 
 import net.minecraft.core.BlockPos;
@@ -54,6 +57,7 @@ public abstract class ProjectBase
 
     private UUID projectId = UUID.randomUUID();
     private ResourceKey<Level> dimension;   // 工程所在维度
+    private UUID centerId;                  // 所属 ProjectCenter 的 UUID
 
     // ===================== 参与者管理 =====================
 
@@ -119,6 +123,24 @@ public abstract class ProjectBase
     public void setDimension(ResourceKey<Level> dimension)
     {
         this.dimension = dimension;
+    }
+
+    public UUID getCenterId()
+    {
+        return centerId;
+    }
+
+    public void setCenterId(UUID centerId)
+    {
+        this.centerId = centerId;
+    }
+
+    public ProjectCenterBlockEntity findCenter(ServerLevel level)
+    {
+        if (centerId == null) return null;
+        IRegionalManager mgr = RegionalManagerRegistry.get(centerId);
+        if (mgr instanceof ProjectCenterBlockEntity be) return be;
+        return null;
     }
 
     // ===================== 加载状态 =====================

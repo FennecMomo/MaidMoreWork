@@ -10,6 +10,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 
@@ -29,6 +31,15 @@ public class ProjectCenterBlock extends BaseEntityBlock
     protected com.mojang.serialization.MapCodec<ProjectCenterBlock> codec()
     {
         return com.mojang.serialization.MapCodec.unit(this);
+    }
+
+    @Nullable
+    @Override
+    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type)
+    {
+        if (level.isClientSide()) return null;
+        return createTickerHelper(type, ProjectCenterRegistration.PROJECT_CENTER_BLOCK_ENTITY.get(),
+                ProjectCenterBlockEntity::serverTick);
     }
 
     @Nullable

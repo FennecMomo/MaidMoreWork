@@ -37,7 +37,8 @@ public class LoggingExtraBrain implements IExtraMaidBrain
                 ModMemories.LOG_INITIALIZED.get(),
                 ModMemories.WORK_ACTION.get(),
                 ModMemories.WORK_TARGET.get(),
-                ModMemories.PROJECT_UUID.get()
+                ModMemories.PROJECT_UUID.get(),
+                ModMemories.PROJECT_CENTER_UUID.get()
         );
     }
 }

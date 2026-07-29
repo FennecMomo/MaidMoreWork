@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
@@ -135,9 +136,19 @@ public abstract class CountingProject extends ProjectBase
         }
         if (isCacheStale(level))
         {
+            ProjectCenterBlockEntity center = findCenter(level);
+            if (center != null)
+            {
+                center.onProjectCacheStale(this);
+            }
             if (!rebuild(level))
             {
                 completed = true;
+                return;
+            }
+            if (center != null)
+            {
+                center.onProjectRebuilt(this, targetBlocks);
             }
         }
     }
@@ -237,6 +248,12 @@ public abstract class CountingProject extends ProjectBase
         }
 
         completed = true;
+
+        ProjectCenterBlockEntity center = findCenter(level);
+        if (center != null)
+        {
+            center.onProjectCompleted(this);
+        }
     }
 
     // 破坏单个方块并收集掉落物到女仆背包

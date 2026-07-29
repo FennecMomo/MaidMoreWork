@@ -9,6 +9,7 @@ import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -18,6 +19,15 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public final class ProjectClientHelper
 {
     public static final Map<UUID, ProjectHudPayload.Entry> DATA = new ConcurrentHashMap<>();
+
+    public static BlockPos scanCenterPos = null;
+    public static int scanCursor = 0;
+    public static int scanTotal = 0;
+
+    public static BlockPos infoCenterPos = null;
+    public static String infoTypeName = "";
+    public static int infoProjectCount = 0;
+    public static int infoMaidCount = 0;
 
     private static int queryTimer = 0;
 

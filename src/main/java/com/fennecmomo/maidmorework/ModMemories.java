@@ -73,4 +73,7 @@ public class ModMemories
     // 为空时女仆没有活跃工程，有值时说明正在参与某个工程
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<UUID>> PROJECT_UUID =
             MEMORY_MODULE_TYPES.register("project_uuid", () -> new MemoryModuleType<>(Optional.empty()));
+
+    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<UUID>> PROJECT_CENTER_UUID =
+            MEMORY_MODULE_TYPES.register("project_center_uuid", () -> new MemoryModuleType<>(Optional.empty()));
 }

@@ -24,4 +24,9 @@ public final class RegionalManagerRegistry
     {
         return MANAGERS.get(id);
     }
+
+    public static java.util.Collection<IRegionalManager> values()
+    {
+        return MANAGERS.values();
+    }
 }

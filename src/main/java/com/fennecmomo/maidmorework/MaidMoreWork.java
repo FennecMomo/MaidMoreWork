@@ -5,12 +5,14 @@ import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
-import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterActivationHud;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditHud;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterInfoPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterScanPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
@@ -104,12 +106,31 @@ public class MaidMoreWork
                         }
                     }
             );
+            registrar.playToClient(
+                    ProjectCenterScanPayload.TYPE,
+                    ProjectCenterScanPayload.STREAM_CODEC,
+                    (payload, context) -> {
+                        ProjectClientHelper.scanCenterPos = payload.centerPos();
+                        ProjectClientHelper.scanCursor = payload.cursor();
+                        ProjectClientHelper.scanTotal = payload.total();
+                    }
+            );
+            registrar.playToClient(
+                    ProjectCenterInfoPayload.TYPE,
+                    ProjectCenterInfoPayload.STREAM_CODEC,
+                    (payload, context) -> {
+                        ProjectClientHelper.infoCenterPos = payload.centerPos();
+                        ProjectClientHelper.infoTypeName = payload.typeName();
+                        ProjectClientHelper.infoProjectCount = payload.projectCount();
+                        ProjectClientHelper.infoMaidCount = payload.maidCount();
+                    }
+            );
             registrar.playToServer(
                     ProjectHudQueryPayload.TYPE,
                     ProjectHudQueryPayload.STREAM_CODEC,
                     (payload, context) -> {
                         ServerPlayer player = (ServerPlayer) context.player();
-                        ProjectHudPayload response = ProjectServerHelper.getNearby(player, 32);
+                        ProjectHudPayload response = ProjectCenterBlockEntity.getNearby(player, 32);
                         PacketDistributor.sendToPlayer(player, response);
                     }
             );
@@ -120,7 +141,7 @@ public class MaidMoreWork
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
         // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
-                ProjectServerHelper.releaseMaid(e.getMaid());
+                ProjectCenterBlockEntity.releaseMaid(e.getMaid());
         });
     }
 
