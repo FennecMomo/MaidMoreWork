@@ -3,9 +3,11 @@ package com.fennecmomo.maidmorework;
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
+import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
 import com.fennecmomo.maidmorework.project.ProjectServerHelper;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterActivationHud;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditHud;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
@@ -76,6 +78,8 @@ public class MaidMoreWork
         ProjectCenterRegistration.ITEMS.register(modBus);
         CREATIVE_TABS.register(modBus);
 
+        ProjectTypeRegistry.discover();
+
         // 网络包注册
         modBus.addListener((RegisterPayloadHandlersEvent event) ->
         {
@@ -88,7 +92,17 @@ public class MaidMoreWork
             registrar.playToClient(
                     ProjectCenterEditPayload.TYPE,
                     ProjectCenterEditPayload.STREAM_CODEC,
-                    (payload, context) -> ProjectCenterEditHud.open(payload)
+                    (payload, context) ->
+                    {
+                        if (payload.projectTypeId().isEmpty() && ProjectTypeRegistry.size() > 0)
+                        {
+                            ProjectCenterActivationHud.open(payload);
+                        }
+                        else
+                        {
+                            ProjectCenterEditHud.open(payload);
+                        }
+                    }
             );
             registrar.playToServer(
                     ProjectHudQueryPayload.TYPE,

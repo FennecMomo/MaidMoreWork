@@ -24,6 +24,8 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
 
     private boolean boundaryVisible = true;
 
+    private String projectTypeId = "";
+
     public ProjectCenterBlockEntity(BlockPos pos, BlockState state)
     {
         super(ProjectCenterRegistration.PROJECT_CENTER_BLOCK_ENTITY.get(), pos, state);
@@ -74,12 +76,14 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
         this.radius = radius;
         this.cornerNW = nw;
         this.cornerSE = se;
-        this.boundaryVisible = true;
+        this.boundaryVisible = false;
+        this.projectTypeId = "";
         setChanged();
     }
 
     public int getRadius() { return radius; }
     public int getAnchor() { return anchor; }
+    public String getProjectTypeId() { return projectTypeId; }
 
     public void setRadius(int radius)
     {
@@ -92,6 +96,12 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
     {
         this.anchor = anchor;
         recalcCorners();
+        setChanged();
+    }
+
+    public void setProjectTypeId(String projectTypeId)
+    {
+        this.projectTypeId = projectTypeId;
         setChanged();
     }
 
@@ -134,6 +144,7 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
         boundaryVisible = input.getBooleanOr("boundaryVisible", true);
         radius = input.getIntOr("radius", 5);
         anchor = input.getIntOr("anchor", 1);
+        projectTypeId = input.getStringOr("projectTypeId", "");
     }
 
     @Override
@@ -184,6 +195,7 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
             output.putBoolean("boundaryVisible", boundaryVisible);
             output.putInt("radius", radius);
             output.putInt("anchor", anchor);
+            output.putString("projectTypeId", projectTypeId);
         }
     }
 }

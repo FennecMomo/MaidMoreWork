@@ -1,7 +1,7 @@
 package com.fennecmomo.maidmorework.project.center;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -12,6 +12,7 @@ import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 import javax.annotation.Nullable;
 import java.util.UUID;
@@ -63,23 +64,17 @@ public class ProjectCenterBlock extends BaseEntityBlock
 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
-                                               Player player, BlockHitResult hitResult)
+                                                Player player, BlockHitResult hitResult)
     {
         if (level.isClientSide()) return InteractionResult.SUCCESS;
         if (level.getBlockEntity(pos) instanceof ProjectCenterBlockEntity be && be.hasInstance())
         {
-            String anchorStr = switch (be.getAnchor())
+            if (player instanceof ServerPlayer sp)
             {
-                case 0 -> "顶部";
-                case 2 -> "底部";
-                default -> "中心";
-            };
-            player.sendSystemMessage(Component.literal(
-                    "§a工程中心 | §fID: " + be.getId().toString().substring(0, 8)
-                    + "§a, 半径: §f" + be.getRadius()
-                    + "§a, 基准点: §f" + anchorStr
-                    + "§a, 范围: §f" + be.getMinCorner().toShortString()
-                    + " §a→§f " + be.getMaxCorner().toShortString()));
+                var payload = new ProjectCenterEditPayload(
+                        be.getId(), be.getBlockPos(), be.getRadius(), be.getAnchor(), be.getProjectTypeId());
+                PacketDistributor.sendToPlayer(sp, payload);
+            }
         }
         return InteractionResult.CONSUME;
     }

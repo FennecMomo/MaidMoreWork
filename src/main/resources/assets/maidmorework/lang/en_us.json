@@ -6,5 +6,7 @@
   "task.maidmorework.mining": "Mining",
   "task.maidmorework.logging": "Logging",
   "task.maidmorework.eat": "Eat",
-  "task.maidmorework.idle": "Idle"
+  "task.maidmorework.idle": "Idle",
+  "projecttype.maidmorework.chopping": "Chopping",
+  "projecttype.maidmorework.chopping.desc": "Chop trees and collect wood within the project area"
 }

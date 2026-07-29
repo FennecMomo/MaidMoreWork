@@ -10,7 +10,7 @@ import net.minecraft.resources.Identifier;
 
 import java.util.UUID;
 
-public record ProjectCenterEditPayload(UUID centerId, BlockPos centerPos, int radius, int anchor) implements CustomPacketPayload
+public record ProjectCenterEditPayload(UUID centerId, BlockPos centerPos, int radius, int anchor, String projectTypeId) implements CustomPacketPayload
 {
     public static final Type<ProjectCenterEditPayload> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath(MaidMoreWork.MODID, "project_center_edit"));
@@ -24,6 +24,7 @@ public record ProjectCenterEditPayload(UUID centerId, BlockPos centerPos, int ra
                     BlockPos.STREAM_CODEC, ProjectCenterEditPayload::centerPos,
                     ByteBufCodecs.INT, ProjectCenterEditPayload::radius,
                     ByteBufCodecs.INT, ProjectCenterEditPayload::anchor,
+                    ByteBufCodecs.STRING_UTF8, ProjectCenterEditPayload::projectTypeId,
                     ProjectCenterEditPayload::new
             );
 }

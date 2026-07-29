@@ -71,7 +71,7 @@ public class ProjectCenterMarkerEventHandler
         if (player instanceof ServerPlayer sp)
         {
             var payload = new ProjectCenterEditPayload(
-                    be.getId(), be.getBlockPos(), be.getRadius(), be.getAnchor());
+                    be.getId(), be.getBlockPos(), be.getRadius(), be.getAnchor(), be.getProjectTypeId());
             PacketDistributor.sendToPlayer(sp, payload);
         }
     }

@@ -6,5 +6,7 @@
   "task.maidmorework.mining": "采矿",
   "task.maidmorework.logging": "伐木",
   "task.maidmorework.eat": "进食",
-  "task.maidmorework.idle": "空闲"
+  "task.maidmorework.idle": "空闲",
+  "projecttype.maidmorework.chopping": "伐木",
+  "projecttype.maidmorework.chopping.desc": "在工程区域内砍伐树木并收集木材"
 }
