@@ -20,14 +20,11 @@ public final class ProjectClientHelper
 {
     public static final Map<UUID, ProjectHudPayload.Entry> DATA = new ConcurrentHashMap<>();
 
-    public static BlockPos scanCenterPos = null;
-    public static int scanCursor = 0;
-    public static int scanTotal = 0;
-
     public static BlockPos infoCenterPos = null;
     public static String infoTypeName = "";
     public static int infoProjectCount = 0;
     public static int infoMaidCount = 0;
+    public static int infoRadius = 0;
 
     private static int queryTimer = 0;
 
@@ -58,5 +55,15 @@ public final class ProjectClientHelper
                 DATA.put(e.projectId(), e);
             }
         }
+    }
+
+    public static void clear()
+    {
+        DATA.clear();
+        infoCenterPos = null;
+        infoTypeName = "";
+        infoProjectCount = 0;
+        infoMaidCount = 0;
+        infoRadius = 0;
     }
 }

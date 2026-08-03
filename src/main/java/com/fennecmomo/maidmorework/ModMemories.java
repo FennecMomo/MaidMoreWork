@@ -12,68 +12,31 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 // 自定义 Memory 类型注册（伐木/挖矿行为共用）
 // Memory 是运行时数据，不序列化（不存盘），只在行为执行期间使用
-// 持久化由 ModAttachments 负责，世界重进时从 Attachment 恢复
-// 通过 LoggingExtraBrain/MiningExtraBrain 注册到 TLM Brain
+//
+// 词条归属原则（一词条只一边记）：
+//   女仆侧只记与自身相关的事，持久化只靠 Attachment（见 ModAttachments）
+//   Memory 是运行时缓存：PROJECT_CENTER_UUID 指向所属中心（唯一持久化词条），
+//   PROJECT_UUID 是中心授予的运行时工程句柄（不持久化，重进后由中心重新授予）
+//   LOG_BLOCKS 是挖矿专用目标列表（挖矿系统尚未接入新版工程框架，暂保留）
 public class ModMemories
 {
-    // ===================== 工作关键词常量 =====================
-
-    // 伐木工作关键词（写入 WORK_ACTION Memory，供气泡文案和 isActive 判定）
-    public static final String WORK_ACTION_CHOPPING = "砍树";
-
-    // 伐木工作目标描述（写入 WORK_TARGET Memory，供气泡文案）
-    public static final String WORK_TARGET_LOG = "原木";
-
     // ===================== Memory 类型注册 =====================
     // Memory 类型延迟注册表
     public static final DeferredRegister<MemoryModuleType<?>> MEMORY_MODULE_TYPES =
             DeferredRegister.create(Registries.MEMORY_MODULE_TYPE, MaidMoreWork.MODID);
 
-    // BFS 出的原木方块列表（只含原木，抵达后逐个砍伐）
-    // SearchBehavior 找到目标后写入，ChopBehavior/MiningBehavior 启动时读取
+    // 挖矿目标方块列表（挖矿 SearchBehavior 找到矿井后写入）
+    // 挖矿系统未接入新版工程框架前暂用此词条，后续重构为挖矿专用
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<List<BlockPos>>> LOG_BLOCKS =
             MEMORY_MODULE_TYPES.register("log_blocks", () -> new MemoryModuleType<>(Optional.empty()));
 
-    // BFS 出的树叶方块列表（整棵树原木砍完后同时标记为蓝图并收集）
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<List<BlockPos>>> LEAVES_BLOCKS =
-            MEMORY_MODULE_TYPES.register("leaves_blocks", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 垫脚方块列表（女仆够不到高处原木时放置，整棵树砍完后依次破坏回收）
-    // 当前版本暂未使用，预留字段
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<List<BlockPos>>> SCAFFOLDING_BLOCKS =
-            MEMORY_MODULE_TYPES.register("scaffolding_blocks", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 当前目标方块（正在走向或砍伐的方块）
-    // 当前版本暂未使用，预留字段
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<BlockPos>> LOG_TARGET =
-            MEMORY_MODULE_TYPES.register("log_target", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 砍伐计时器（控制砍伐节奏，到阈值才破坏方块）
-    // 当前版本暂未使用，ChopBehavior 内部自己维护计时
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<Integer>> CHOP_TIMER =
-            MEMORY_MODULE_TYPES.register("chop_timer", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 初始化标记（抵达树脚后排序标记）
-    // 当前版本暂未使用，预留字段
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<Boolean>> LOG_INITIALIZED =
-            MEMORY_MODULE_TYPES.register("log_initialized", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 当前工作行为描述（如“砍树”、“挖矿”）
-    // 供 SearchBehavior 拼气泡文案：“无法砍树，请开启Home模式”
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<String>> WORK_ACTION =
-            MEMORY_MODULE_TYPES.register("work_action", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 当前工作目标描述（如“原木”、“矿石”）
-    // 供 SearchBehavior 拼气泡文案：“家园范围内没有可用的原木”
-    public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<String>> WORK_TARGET =
-            MEMORY_MODULE_TYPES.register("work_target", () -> new MemoryModuleType<>(Optional.empty()));
-
-    // 当前工作工程 UUID（关联到 ProjectManager 中的工程实例）
-    // SearchBehavior 找到目标后创建工程并写入，ChopBehavior 通过此 UUID 获取工程
-    // 为空时女仆没有活跃工程，有值时说明正在参与某个工程
+    // 当前工作工程 UUID（中心授予的运行时句柄）
+    // 中心通过 assignments 表管理归属（唯一真相），本词条仅作运行期快速查询
+    // 重进世界后为空，女仆向中心请求工程时重新授予
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<UUID>> PROJECT_UUID =
             MEMORY_MODULE_TYPES.register("project_uuid", () -> new MemoryModuleType<>(Optional.empty()));
 
+    // 女仆所属中心 UUID（唯一持久化词条，对应 ModAttachments.PROJECT_CENTER_UUID_SAVED）
     public static final DeferredHolder<MemoryModuleType<?>, MemoryModuleType<UUID>> PROJECT_CENTER_UUID =
             MEMORY_MODULE_TYPES.register("project_center_uuid", () -> new MemoryModuleType<>(Optional.empty()));
 }

@@ -13,18 +13,23 @@ import java.util.Optional;
 import java.util.UUID;
 
 // 女仆持久化 Attachment 类型（NeoForge Attachment 系统）
-// 用于退出重进后恢复女仆与工程的关联关系
+// 用于退出重进后恢复女仆与中心的关联
 // 数据随女仆实体一起序列化到磁盘
+//
+// 词条归属原则（一词条只一边记）：
+//   女仆侧只持久化 PROJECT_CENTER_UUID_SAVED（她属于哪个中心）
+//   工程归属（女仆↔工程）的持久化真相在中心的 assignments 表（SavedData），
+//   女仆不再记工程 UUID，重进后向中心请求恢复/重新分配
 public class ModAttachments
 {
     // Attachment 类型延迟注册表
     public static final DeferredRegister<AttachmentType<?>> ATTACHMENT_TYPES =
             DeferredRegister.create(NeoForgeRegistries.ATTACHMENT_TYPES, MaidMoreWork.MODID);
 
-    // 工程 UUID 引用持久化（女仆关联的工程实例标识）
-    // 世界重进后通过 ProjectServerHelper.getAvailableProject 重新关联工程
-    public static final DeferredHolder<AttachmentType<?>, AttachmentType<Optional<UUID>>> PROJECT_UUID_SAVED =
-            ATTACHMENT_TYPES.register("project_uuid_saved", () ->
+    // 中心 UUID 引用持久化（女仆所属的工程中心实例标识）
+    // 世界重进后通过 ProjectCenterManager.getCenterOf 重新关联中心
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<Optional<UUID>>> PROJECT_CENTER_UUID_SAVED =
+            ATTACHMENT_TYPES.register("project_center_uuid_saved", () ->
                     AttachmentType.<Optional<UUID>>builder(Optional::empty)
                             .serialize(new IAttachmentSerializer<Optional<UUID>>()
                             {

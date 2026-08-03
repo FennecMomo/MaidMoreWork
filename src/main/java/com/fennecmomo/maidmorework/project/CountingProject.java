@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterInstance;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
@@ -26,7 +26,6 @@ import net.minecraft.world.level.block.state.BlockState;
 // 子类只需实现 ProjectBase 中定义的抽象方法：
 //   - isValidTarget()  单点目标有效性判定
 //   - rebuild()        目标列表重建
-//   - isActive()       参与者活跃判定
 //   - onComplete()     完成回调
 //   - getPosition()    工程绑定位置
 public abstract class CountingProject extends ProjectBase
@@ -90,12 +89,9 @@ public abstract class CountingProject extends ProjectBase
     // 1. 通过可覆写方法获取本次进度增量和贡献增量
     // 2. 进度累加，贡献累加
     // 3. 计数达到任务量 → 批量破坏 + 按贡献分配掉落物 → 标记完成
-    // 缓存空洞检测已移至 ProjectServerHelper.tick 统一调度，此处不再检查
     // 返回 true = 正常推进，返回 false = 无有效目标或已完成
     public boolean execute(ServerLevel level, UUID maidUuid)
     {
-        setLoaded(true);
-
         if (targetBlocks.isEmpty())
         {
             completed = true;
@@ -136,7 +132,7 @@ public abstract class CountingProject extends ProjectBase
         }
         if (isCacheStale(level))
         {
-            ProjectCenterBlockEntity center = findCenter(level);
+            ProjectCenterInstance center = findCenter(level);
             if (center != null)
             {
                 center.onProjectCacheStale(this);
@@ -194,62 +190,47 @@ public abstract class CountingProject extends ProjectBase
     // 进入时先剔除离线参与者（execute 驱动者必然在线，不会全员离线）
     protected void completeTargets(ServerLevel level)
     {
-        Map<UUID, Integer> onlineContributions = new HashMap<>();
-        for (Map.Entry<UUID, Integer> entry : getContributions().entrySet())
+        ProjectCenterInstance center = findCenter(level);
+
+        for (BlockPos pos : targetBlocks)
         {
-            Entity entity = level.getEntity(entry.getKey());
-            if (entity instanceof EntityMaid)
+            if (!level.isLoaded(pos))
             {
-                onlineContributions.put(entry.getKey(), entry.getValue());
+                if (center != null)
+                {
+                    UUID firstMaid = null;
+                    if (!getParticipants().isEmpty()) firstMaid = getParticipants().get(0);
+                    center.addPendingDestroy(pos, firstMaid != null ? firstMaid : new UUID(0, 0));
+                }
+                continue;
             }
-        }
 
-        int totalContrib = 0;
-        for (int v : onlineContributions.values())
-        {
-            totalContrib += v;
-        }
-        if (totalContrib == 0)
-        {
-            totalContrib = 1;
-        }
-
-        int assigned = 0;
-        for (Map.Entry<UUID, Integer> entry : onlineContributions.entrySet())
-        {
-            UUID maidUuid = entry.getKey();
-            int share = (int) ((float) entry.getValue() / totalContrib * targetBlocks.size());
-            int end = Math.min(assigned + share, targetBlocks.size());
-
-            Entity entity = level.getEntity(maidUuid);
-            EntityMaid maid = (EntityMaid) entity;
-            for (int i = assigned; i < end; i++)
+            EntityMaid collector = null;
+            for (UUID uuid : getParticipants())
             {
-                destroyAndCollect(level, maid, targetBlocks.get(i));
-            }
-            assigned = end;
-        }
-
-        // 剩余方块（整除不均的部分）分配给第一个在线的参与者
-        if (assigned < targetBlocks.size())
-        {
-            for (Map.Entry<UUID, Integer> entry : onlineContributions.entrySet())
-            {
-                Entity entity = level.getEntity(entry.getKey());
+                Entity entity = level.getEntity(uuid);
                 if (entity instanceof EntityMaid maid)
                 {
-                    for (int i = assigned; i < targetBlocks.size(); i++)
-                    {
-                        destroyAndCollect(level, maid, targetBlocks.get(i));
-                    }
+                    collector = maid;
                     break;
                 }
+            }
+
+            BlockState state = level.getBlockState(pos);
+            if (state.isAir()) continue;
+
+            if (collector != null)
+            {
+                destroyAndCollect(level, collector, pos);
+            }
+            else
+            {
+                level.destroyBlock(pos, true);
             }
         }
 
         completed = true;
 
-        ProjectCenterBlockEntity center = findCenter(level);
         if (center != null)
         {
             center.onProjectCompleted(this);

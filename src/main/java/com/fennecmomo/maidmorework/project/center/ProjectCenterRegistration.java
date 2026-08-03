@@ -28,6 +28,8 @@ public class ProjectCenterRegistration
                             .instabreak()
                             .strength(-1.0F)
                             .noLootTable()
+                            // 禁止活塞推动：中心实例与方块位置绑定，移动会导致实例失联
+                            .pushReaction(net.minecraft.world.level.material.PushReaction.BLOCK)
             );
 
     public static final DeferredHolder<Item, BlockItem> PROJECT_CENTER_BLOCK_ITEM =

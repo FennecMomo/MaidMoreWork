@@ -7,13 +7,15 @@ import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 
 import java.util.UUID;
 
+// 工程中心命令：全部通过 ProjectCenterManager 按 id 直接操作中心实例
+// 半径/基准点/类型修改后同步方块实体身份，保证客户端边界渲染一致
 public class ProjectCenterCommand
 {
     public static void onRegisterCommands(RegisterCommandsEvent event)
@@ -58,38 +60,41 @@ public class ProjectCenterCommand
                 ));
     }
 
+    private static ProjectCenterInstance resolve(CommandSourceStack source, String idStr)
+    {
+        UUID id;
+        try { id = UUID.fromString(idStr); }
+        catch (IllegalArgumentException e) { return null; }
+        if (!(source.getLevel() instanceof ServerLevel serverLevel)) return null;
+        return ProjectCenterManager.get(serverLevel, id);
+    }
+
+    private static void syncIdentity(Level level, ProjectCenterInstance inst)
+    {
+        if (level.getBlockEntity(inst.getBlockPos()) instanceof ProjectCenterBlockEntity be)
+        {
+            be.updateIdentity(inst.getRadius(), inst.getAnchor(),
+                    inst.getProjectTypeId(), inst.isBoundaryVisible());
+        }
+    }
+
     private static int deleteCenter(CommandSourceStack source, String idStr)
     {
         ServerPlayer player = source.getPlayer();
         if (player == null) return 0;
 
-        UUID id;
-        try { id = UUID.fromString(idStr); }
-        catch (IllegalArgumentException e) { return 0; }
-
-        Level level = source.getLevel();
-        ProjectCenterInstance inst = ProjectCenterInstanceManager.get(level, id);
-        if (inst == null) return 0;
-
-        BlockPos center = inst.center();
-        BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
-        for (int dx = -16; dx <= 16; dx++)
+        ProjectCenterInstance inst = resolve(source, idStr);
+        if (inst == null)
         {
-            for (int dy = -16; dy <= 16; dy++)
-            {
-                for (int dz = -16; dz <= 16; dz++)
-                {
-                    mp.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
-                    if (level.getBlockEntity(mp) instanceof ProjectCenterBlockEntity cbe
-                            && cbe.getId() != null && cbe.getId().equals(id))
-                    {
-                        level.removeBlock(mp, false);
-                    }
-                }
-            }
+            player.sendSystemMessage(Component.literal("§c未找到工程中心"));
+            return 0;
         }
 
-        ProjectCenterInstanceManager.remove(level, id);
+        if (source.getLevel() instanceof ServerLevel serverLevel)
+        {
+            ProjectCenterManager.deleteById(serverLevel, inst.getId());
+        }
+        source.getLevel().removeBlock(inst.getBlockPos(), false);
         player.sendSystemMessage(Component.literal("§c工程中心已删除"));
         return 1;
     }
@@ -99,42 +104,23 @@ public class ProjectCenterCommand
         ServerPlayer player = source.getPlayer();
         if (player == null) return 0;
 
-        UUID id;
-        try { id = UUID.fromString(idStr); }
-        catch (IllegalArgumentException e) { return 0; }
-
-        Level level = source.getLevel();
-        BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
-        for (int dx = -16; dx <= 16; dx++)
+        ProjectCenterInstance inst = resolve(source, idStr);
+        if (inst == null)
         {
-            for (int dy = -16; dy <= 16; dy++)
-            {
-                for (int dz = -16; dz <= 16; dz++)
-                {
-                    mp.set(player.blockPosition().getX() + dx, player.blockPosition().getY() + dy, player.blockPosition().getZ() + dz);
-                    if (level.getBlockEntity(mp) instanceof ProjectCenterBlockEntity cbe
-                            && cbe.getId() != null && cbe.getId().equals(id))
-                    {
-                        cbe.setRadius(value);
-                        player.sendSystemMessage(Component.literal("§a半径已更新为: " + value));
-                        return 1;
-                    }
-                }
-            }
+            player.sendSystemMessage(Component.literal("§c未找到工程中心"));
+            return 0;
         }
 
-        player.sendSystemMessage(Component.literal("§c未找到工程中心"));
-        return 0;
+        inst.setRadius(value);
+        syncIdentity(source.getLevel(), inst);
+        player.sendSystemMessage(Component.literal("§a半径已更新为: " + value));
+        return 1;
     }
 
     private static int setAnchor(CommandSourceStack source, String idStr, String mode)
     {
         ServerPlayer player = source.getPlayer();
         if (player == null) return 0;
-
-        UUID id;
-        try { id = UUID.fromString(idStr); }
-        catch (IllegalArgumentException e) { return 0; }
 
         int anchor;
         switch (mode)
@@ -145,28 +131,17 @@ public class ProjectCenterCommand
             default -> { return 0; }
         }
 
-        Level level = source.getLevel();
-        BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
-        for (int dx = -16; dx <= 16; dx++)
+        ProjectCenterInstance inst = resolve(source, idStr);
+        if (inst == null)
         {
-            for (int dy = -16; dy <= 16; dy++)
-            {
-                for (int dz = -16; dz <= 16; dz++)
-                {
-                    mp.set(player.blockPosition().getX() + dx, player.blockPosition().getY() + dy, player.blockPosition().getZ() + dz);
-                    if (level.getBlockEntity(mp) instanceof ProjectCenterBlockEntity cbe
-                            && cbe.getId() != null && cbe.getId().equals(id))
-                    {
-                        cbe.setAnchor(anchor);
-                        player.sendSystemMessage(Component.literal("§a基准点已更新为: " + mode));
-                        return 1;
-                    }
-                }
-            }
+            player.sendSystemMessage(Component.literal("§c未找到工程中心"));
+            return 0;
         }
 
-        player.sendSystemMessage(Component.literal("§c未找到工程中心"));
-        return 0;
+        inst.setAnchor(anchor);
+        syncIdentity(source.getLevel(), inst);
+        player.sendSystemMessage(Component.literal("§a基准点已更新为: " + mode));
+        return 1;
     }
 
     private static int setType(CommandSourceStack source, String idStr, String typeId)
@@ -174,38 +149,23 @@ public class ProjectCenterCommand
         ServerPlayer player = source.getPlayer();
         if (player == null) return 0;
 
-        UUID id;
-        try { id = UUID.fromString(idStr); }
-        catch (IllegalArgumentException e) { return 0; }
-
         if (ProjectTypeRegistry.get(typeId) == null)
         {
             player.sendSystemMessage(Component.literal("§c未知的工程类型: " + typeId));
             return 0;
         }
 
-        Level level = source.getLevel();
-        BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
-        for (int dx = -16; dx <= 16; dx++)
+        ProjectCenterInstance inst = resolve(source, idStr);
+        if (inst == null)
         {
-            for (int dy = -16; dy <= 16; dy++)
-            {
-                for (int dz = -16; dz <= 16; dz++)
-                {
-                    mp.set(player.blockPosition().getX() + dx, player.blockPosition().getY() + dy, player.blockPosition().getZ() + dz);
-                    if (level.getBlockEntity(mp) instanceof ProjectCenterBlockEntity cbe
-                            && cbe.getId() != null && cbe.getId().equals(id))
-                    {
-                        cbe.setProjectTypeId(typeId);
-                        cbe.setBoundaryVisible(true);
-                        player.sendSystemMessage(Component.literal("§a工程类型已设置为: " + typeId));
-                        return 1;
-                    }
-                }
-            }
+            player.sendSystemMessage(Component.literal("§c未找到工程中心"));
+            return 0;
         }
 
-        player.sendSystemMessage(Component.literal("§c未找到工程中心"));
-        return 0;
+        inst.setProjectTypeId(typeId);
+        inst.setBoundaryVisible(true);
+        syncIdentity(source.getLevel(), inst);
+        player.sendSystemMessage(Component.literal("§a工程类型已设置为: " + typeId));
+        return 1;
     }
 }

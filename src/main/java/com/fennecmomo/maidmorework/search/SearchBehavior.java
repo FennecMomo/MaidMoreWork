@@ -8,7 +8,6 @@ import java.util.Set;
 
 import com.fennecmomo.maidmorework.MaidBubbleHelper;
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
-import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 
 import net.minecraft.core.BlockPos;
@@ -46,6 +45,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private final ISearchAction scanAction;       // 单点检索回调，判断当前点是否为目标
     private final ISearchAction preSearch;        // 前置检索：搜索前尝试查找孤儿工程（可为 null）
     private final ISearchAction onFound;          // 找到目标后的回调（可为 null）
+    private final String actionName;              // 动作名称（气泡文案："跟随模式下无法{actionName}"）
+    private final String targetName;              // 目标名称（气泡文案："搜索{targetName}中..."）
     private final MemoryModuleType<?> targetMemory; // 目标 Memory，为空时搜索，有值时结束
     private final int scanHalfXZ;                  // 非家园模式 XZ 半径
     private final int scanYDown;                   // 非家园模式 Y 向下范围
@@ -72,26 +73,33 @@ public class SearchBehavior extends Behavior<EntityMaid>
     // ===================== 构造器 =====================
 
     // scanAction: 单点检索方法，判断当前点是否为目标，返回 true/false
+    // actionName: 动作名（如"挖矿"），用于跟随模式气泡文案
+    // targetName: 目标名（如"矿井"），用于搜索进度/无资源气泡文案
     // targetMemory: 目标 Memory，为空时搜索行为可启动，有值时搜索行为结束
     // scanHalfXZ/scanYDown/scanYUp: 螺旋搜索范围（以女仆位置为原点，非家园限制时使用）
     // useHomeRestriction: 是否受家园范围限制，默认true
-    public SearchBehavior(ISearchAction scanAction, MemoryModuleType<?> targetMemory,
+    public SearchBehavior(ISearchAction scanAction, String actionName, String targetName,
+                          MemoryModuleType<?> targetMemory,
                           int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
     {
-        this(scanAction, null, null, targetMemory, scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
+        this(scanAction, null, null, actionName, targetName, targetMemory,
+                scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
     }
 
     // 带前置检索的构造器：preSearch 在螺旋搜索前执行，用于优先接取孤儿工程
     public SearchBehavior(ISearchAction scanAction, ISearchAction preSearch,
+                          String actionName, String targetName,
                           MemoryModuleType<?> targetMemory,
                           int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
     {
-        this(scanAction, preSearch, null, targetMemory, scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
+        this(scanAction, preSearch, null, actionName, targetName, targetMemory,
+                scanHalfXZ, scanYDown, scanYUp, useHomeRestriction);
     }
 
     // 完整构造器：支持 preSearch + onFound 回调
     // onFound: 找到目标后在 tick 中调用，负责 BFS、工程创建、Memory 写入等后续操作
     public SearchBehavior(ISearchAction scanAction, ISearchAction preSearch, ISearchAction onFound,
+                          String actionName, String targetName,
                           MemoryModuleType<?> targetMemory,
                           int scanHalfXZ, int scanYDown, int scanYUp, boolean useHomeRestriction)
     {
@@ -99,6 +107,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
         this.scanAction = scanAction;
         this.preSearch = preSearch;
         this.onFound = onFound;
+        this.actionName = actionName;
+        this.targetName = targetName;
         this.targetMemory = targetMemory;
         this.scanHalfXZ = scanHalfXZ;
         this.scanYDown = scanYDown;
@@ -189,9 +199,8 @@ public class SearchBehavior extends Behavior<EntityMaid>
         // 搜索进行中：每 tick 刷新进度气泡
         if (spiralQueue != null && !spiralQueue.isEmpty() && spiralTotalEstimate > 0)
         {
-            String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
             String progress = "进度:[" + spiralHitCount + "/" + spiralTotalEstimate + "]";
-            MaidBubbleHelper.get(maid).setFloor("搜索" + target + "中..." + progress);
+            MaidBubbleHelper.get(maid).setFloor("搜索" + targetName + "中..." + progress);
         }
 
         // 螺旋范围耗尽，根据模式选择后续策略
@@ -227,7 +236,7 @@ public class SearchBehavior extends Behavior<EntityMaid>
     {
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
-            MaidBubbleHelper.get(maid).setFollowWarn(maid);
+            MaidBubbleHelper.get(maid).setFollowWarn(actionName);
             silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
             return true;
         }
@@ -371,10 +380,9 @@ public class SearchBehavior extends Behavior<EntityMaid>
     private void enterSilenceWithHint(EntityMaid maid, int scanned, int filtered)
     {
         silenceTicks = MaidMoreWorkConfig.SILENCE_TICKS;
-        String target = maid.getBrain().getMemory(ModMemories.WORK_TARGET.get()).orElse("目标");
         MaidBubbleHelper helper = MaidBubbleHelper.get(maid);
         helper.clearFloor();
-        helper.set("家园没有可用" + target, -999);
+        helper.set("家园没有可用" + targetName, -999);
     }
 
     // 非限制模式：选随机方向导航到 20~35 格外的某个点

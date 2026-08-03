@@ -42,7 +42,6 @@ public final class ProjectHudRenderer
         int maxDistSq = MaidMoreWorkConfig.HUD_RENDER_DISTANCE * MaidMoreWorkConfig.HUD_RENDER_DISTANCE;
 
         renderCenterInfo(mc, ps, buf, camera, camPos, maxDistSq);
-        renderScanProgress(mc, ps, buf, camera, camPos, maxDistSq);
         renderProjectHuds(mc, ps, buf, camera, camPos, maxDistSq);
 
         buf.endBatch(RenderTypes.entityTranslucent(WHITE_TEX));
@@ -64,32 +63,9 @@ public final class ProjectHudRenderer
         List<Component> lines = new ArrayList<>();
         lines.add(Component.literal("运行正常"));
         lines.add(Component.literal(ProjectClientHelper.infoTypeName));
+        lines.add(Component.literal("大小: " + ProjectClientHelper.infoRadius));
         lines.add(Component.literal("工程: " + ProjectClientHelper.infoProjectCount));
         lines.add(Component.literal("女仆: " + ProjectClientHelper.infoMaidCount));
-        BillboardRenderer.render(buf, ps, mc.font, lines,
-                MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
-
-        ps.popPose();
-    }
-
-    private static void renderScanProgress(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,
-                                            Camera camera, Vec3 camPos, int maxDistSq)
-    {
-        if (ProjectClientHelper.scanCenterPos == null || ProjectClientHelper.scanTotal <= 0) return;
-        if (ProjectClientHelper.scanCenterPos.distToCenterSqr(camPos) > maxDistSq) return;
-
-        Vec3 worldPos = ProjectClientHelper.scanCenterPos.getCenter().add(0, 1.5, 0);
-        ps.pushPose();
-        ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
-        ps.mulPose(camera.rotation());
-        ps.scale(MaidMoreWorkConfig.PANEL_SCALE, -MaidMoreWorkConfig.PANEL_SCALE, MaidMoreWorkConfig.PANEL_SCALE);
-        ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
-
-        int pct = (int) (100L * ProjectClientHelper.scanCursor / ProjectClientHelper.scanTotal);
-        List<Component> lines = List.of(
-                Component.literal("刷新中..." + pct + "%"),
-                Component.literal(ProjectClientHelper.scanCursor + " / " + ProjectClientHelper.scanTotal)
-        );
         BillboardRenderer.render(buf, ps, mc.font, lines,
                 MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
 

@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.logging;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.fennecmomo.maidmorework.MaidBubbleHelper;
@@ -9,8 +10,10 @@ import com.fennecmomo.maidmorework.ModAttachments;
 import com.fennecmomo.maidmorework.ModMemories;
 import com.fennecmomo.maidmorework.project.ChoppingProject;
 import com.fennecmomo.maidmorework.project.ProjectBase;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterInstance;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
+import com.mojang.logging.LogUtils;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -27,6 +30,8 @@ import net.neoforged.neoforge.transfer.transaction.Transaction;
 
 public class ChopBehavior extends Behavior<EntityMaid>
 {
+    private static final org.slf4j.Logger LOGGER = LogUtils.getLogger();
+
     private int chopTimer = 0;
     private boolean reachedTree = false;
     private boolean roaming = false;
@@ -40,48 +45,100 @@ public class ChopBehavior extends Behavior<EntityMaid>
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
+        LOGGER.debug("[ChopDebug] checkExtraStartConditions ENTER maid=" + maid.getUUID().toString().substring(0, 8));
+
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
+            LOGGER.debug("[ChopDebug] H1: not HomeMode & canBrainMoving -> REJECT");
             return false;
         }
 
-        ProjectCenterBlockEntity center = ensureCenter(maid);
-        if (center == null) return false;
-
-        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        if (projectUuid != null && ProjectCenterBlockEntity.findProject(projectUuid, ChoppingProject.class) != null)
+        ProjectCenterInstance center = ensureCenter(level, maid);
+        if (center == null)
         {
-            return true;
+            LOGGER.debug("[ChopDebug] H2: ensureCenter returned null -> REJECT");
+            return false;
         }
 
-        ProjectBase project = center.findOrCreateProject(maid);
-        if (project == null) return false;
+        LOGGER.debug("[ChopDebug] H3: center OK, pos=" + center.getBlockPos().toShortString()
+                + " type=" + center.getProjectTypeId());
+
+        // 已有运行句柄且工程仍存活 → 继续当前工程
+        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
+        if (projectUuid != null)
+        {
+            ChoppingProject existing = ProjectCenterManager.findProject(projectUuid, ChoppingProject.class);
+            LOGGER.debug("[ChopDebug] H4: existing projectUuid=" + projectUuid.toString().substring(0, 8)
+                    + " found=" + (existing != null));
+            if (existing != null && !existing.isCompleted())
+            {
+                existing.claim(maid.getUUID());
+                return true;
+            }
+            maid.getBrain().eraseMemory(ModMemories.PROJECT_UUID.get());
+        }
+
+        // 无有效工程 → 向中心请求分配（恢复 assignment 或新建工程，由中心裁决）
+        LOGGER.debug("[ChopDebug] H5: no existing project, calling assignOrResume");
+        LOGGER.debug("[ChopDebug] H5a: center inactive=" + center.getInactiveCount()
+                + " managed=" + center.getManagedProjectCount() + " active=" + center.getActiveCount());
+
+        ProjectBase project = center.assignOrResume(level, maid);
+        if (project == null)
+        {
+            LOGGER.debug("[ChopDebug] H6: assignOrResume returned null -> REJECT");
+            return false;
+        }
+
+        LOGGER.debug("[ChopDebug] H7: project assigned, id=" + project.getId().toString().substring(0, 8) + " -> ACCEPT");
 
         maid.getBrain().setMemory(ModMemories.PROJECT_UUID.get(), project.getId());
-        maid.setData(ModAttachments.PROJECT_UUID_SAVED, java.util.Optional.of(project.getId()));
         return true;
     }
 
-    private ProjectCenterBlockEntity ensureCenter(EntityMaid maid)
+    private ProjectCenterInstance ensureCenter(ServerLevel level, EntityMaid maid)
     {
+        LOGGER.debug("[ChopDebug] ensureCenter ENTER");
+
         UUID centerUuid = maid.getBrain().getMemory(ModMemories.PROJECT_CENTER_UUID.get()).orElse(null);
+        if (centerUuid == null)
+        {
+            Optional<UUID> saved = maid.getData(ModAttachments.PROJECT_CENTER_UUID_SAVED);
+            if (saved.isPresent())
+            {
+                centerUuid = saved.get();
+                maid.getBrain().setMemory(ModMemories.PROJECT_CENTER_UUID.get(), centerUuid);
+            }
+        }
+        LOGGER.debug("[ChopDebug] C1: memory centerUuid=" + (centerUuid != null ? centerUuid.toString().substring(0, 8) : "null"));
+
         if (centerUuid != null)
         {
-            com.fennecmomo.maidmorework.lib.region.IRegionalManager mgr =
-                    com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry.get(centerUuid);
-            if (mgr instanceof ProjectCenterBlockEntity be && be.hasInstance()
-                    && "chopping".equals(be.getProjectTypeId()))
+            ProjectCenterInstance center = ProjectCenterManager.get(level, centerUuid);
+            boolean ok = center != null && "chopping".equals(center.getProjectTypeId());
+            LOGGER.debug("[ChopDebug] C2: manager lookup ok=" + ok);
+            if (ok)
             {
-                return be;
+                // 恢复既有中心：补登记 savedHomes + 补写持久化印记
+                LOGGER.debug("[ChopDebug] C3: returning existing center, re-join");
+                center.joinCenter(maid);
+                maid.setData(ModAttachments.PROJECT_CENTER_UUID_SAVED, Optional.of(centerUuid));
+                return center;
             }
         }
 
-        ProjectCenterBlockEntity center = ProjectCenterBlockEntity.findNearestActiveCenter(maid);
+        ProjectCenterInstance center = ProjectCenterManager.findNearestActive(maid);
+        LOGGER.debug("[ChopDebug] C4: findNearestActive result="
+                + (center != null ? center.getBlockPos().toShortString() : "null"));
+
         if (center != null && "chopping".equals(center.getProjectTypeId()))
         {
+            LOGGER.debug("[ChopDebug] C5: joining center, pos=" + center.getBlockPos().toShortString());
             center.joinCenter(maid);
+            maid.setData(ModAttachments.PROJECT_CENTER_UUID_SAVED, Optional.of(center.getId()));
             return center;
         }
+        LOGGER.debug("[ChopDebug] C6: no valid center found -> RETURN null");
         return null;
     }
 
@@ -90,15 +147,24 @@ public class ChopBehavior extends Behavior<EntityMaid>
     {
         if (!maid.isHomeModeEnable() && maid.canBrainMoving())
         {
+            LOGGER.debug("[ChopDebug] S1: canStillUse REJECT - not HomeMode");
+            releaseAssignment(maid);
             clearAllMemory(maid);
-            maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
             return false;
         }
 
         UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        if (projectUuid == null) return false;
+        LOGGER.debug("[ChopDebug] S2: canStillUse projectUuid=" + (projectUuid != null ? projectUuid.toString().substring(0, 8) : "null"));
 
-        ChoppingProject project = ProjectCenterBlockEntity.findProject(projectUuid, ChoppingProject.class);
+        if (projectUuid == null)
+        {
+            LOGGER.debug("[ChopDebug] S3: canStillUse REJECT - no projectUuid");
+            return false;
+        }
+
+        ChoppingProject project = ProjectCenterManager.findProject(projectUuid, ChoppingProject.class);
+        LOGGER.debug("[ChopDebug] S4: findProject result=" + (project != null ? "found, completed=" + project.isCompleted() : "null"));
+
         return project != null && !project.isCompleted();
     }
 
@@ -107,8 +173,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
     {
         MaidBubbleHelper.get(maid).clearAll();
         MaidBubbleHelper.get(maid).clearFloor();
-        maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), ModMemories.WORK_ACTION_CHOPPING);
-        maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), ModMemories.WORK_TARGET_LOG);
         if (maid.getNavigation().isInProgress()) {}
         maid.getNavigation().stop();
         equipAxe(maid);
@@ -128,10 +192,15 @@ public class ChopBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        ChoppingProject project = ProjectCenterBlockEntity.findProject(projectUuid, ChoppingProject.class);
+        ChoppingProject project = ProjectCenterManager.findProject(projectUuid, ChoppingProject.class);
         if (project == null)
         {
             stopChop(maid);
+            return;
+        }
+
+        if (!level.isLoaded(project.getPosition()))
+        {
             return;
         }
 
@@ -182,7 +251,7 @@ public class ChopBehavior extends Behavior<EntityMaid>
                 }
                 else
                 {
-                    ProjectCenterBlockEntity.removeByProject(project, false);
+                    ProjectCenterManager.removeByProject(level, project, false);
                     roaming = true;
                     pickRandomAndMove(maid, level);
                     stopChop(maid);
@@ -229,35 +298,27 @@ public class ChopBehavior extends Behavior<EntityMaid>
         }
     }
 
+    // 向中心释放当前 assignment（幂等）：停止/收起/失联时调用
+    private void releaseAssignment(EntityMaid maid)
+    {
+        ProjectCenterInstance center = ProjectCenterManager.getCenterOf(maid);
+        if (center != null)
+        {
+            center.releaseAssignment(maid);
+        }
+    }
+
     private void stopChop(EntityMaid maid)
     {
-        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        if (projectUuid != null)
-        {
-            ChoppingProject project = ProjectCenterBlockEntity.findProject(projectUuid, ChoppingProject.class);
-            if (project != null)
-            {
-                project.release(maid.getUUID());
-            }
-        }
+        releaseAssignment(maid);
         clearAllMemory(maid);
-        maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
     }
 
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long time)
     {
-        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        if (projectUuid != null)
-        {
-            ChoppingProject project = ProjectCenterBlockEntity.findProject(projectUuid, ChoppingProject.class);
-            if (project != null)
-            {
-                project.release(maid.getUUID());
-            }
-        }
+        releaseAssignment(maid);
         clearAllMemory(maid);
-        maid.removeData(ModAttachments.PROJECT_UUID_SAVED);
         if (!roaming)
         {
             maid.getNavigation().stop();
@@ -323,11 +384,6 @@ public class ChopBehavior extends Behavior<EntityMaid>
 
     private void clearAllMemory(EntityMaid maid)
     {
-        maid.getBrain().eraseMemory(ModMemories.LOG_BLOCKS.get());
-        maid.getBrain().eraseMemory(ModMemories.LOG_TARGET.get());
-        maid.getBrain().eraseMemory(ModMemories.CHOP_TIMER.get());
-        maid.getBrain().eraseMemory(ModMemories.LOG_INITIALIZED.get());
-        maid.getBrain().eraseMemory(ModMemories.SCAFFOLDING_BLOCKS.get());
         maid.getBrain().eraseMemory(ModMemories.PROJECT_UUID.get());
     }
 

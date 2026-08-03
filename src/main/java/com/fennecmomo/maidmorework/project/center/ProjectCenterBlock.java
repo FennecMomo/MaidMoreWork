@@ -2,6 +2,7 @@ package com.fennecmomo.maidmorework.project.center;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -10,14 +11,17 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.BlockEntityTicker;
-import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 
 import javax.annotation.Nullable;
 import java.util.UUID;
 
+// 工程中心方块（桥）
+//
+// 只负责静态行为：放置时创建中心实例、右键交互
+// 拆除时由方块实体的 setRemoved 通知 ProjectCenterManager 删除中心
+// 不再挂 ticker：业务由 ProjectCenterManager 全局驱动
 public class ProjectCenterBlock extends BaseEntityBlock
 {
     private static final int DEFAULT_RADIUS = 5;
@@ -31,15 +35,6 @@ public class ProjectCenterBlock extends BaseEntityBlock
     protected com.mojang.serialization.MapCodec<ProjectCenterBlock> codec()
     {
         return com.mojang.serialization.MapCodec.unit(this);
-    }
-
-    @Nullable
-    @Override
-    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type)
-    {
-        if (level.isClientSide()) return null;
-        return createTickerHelper(type, ProjectCenterRegistration.PROJECT_CENTER_BLOCK_ENTITY.get(),
-                ProjectCenterBlockEntity::serverTick);
     }
 
     @Nullable
@@ -65,10 +60,8 @@ public class ProjectCenterBlock extends BaseEntityBlock
         {
             UUID id = UUID.randomUUID();
             UUID owner = placer instanceof Player player ? player.getUUID() : new UUID(0, 0);
-            int r = DEFAULT_RADIUS;
-            BlockPos nw = new BlockPos(pos.getX() - r, pos.getY() - r, pos.getZ() - r);
-            BlockPos se = new BlockPos(pos.getX() + r, pos.getY() + r, pos.getZ() + r);
-            be.setInstanceData(id, owner, r, nw, se);
+            ProjectCenterManager.create((ServerLevel) level, id, owner, pos, DEFAULT_RADIUS, 1);
+            be.setInstanceData(id, owner, DEFAULT_RADIUS, 1);
         }
     }
 

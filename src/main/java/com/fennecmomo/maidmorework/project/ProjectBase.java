@@ -6,16 +6,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import com.fennecmomo.maidmorework.lib.region.IRegionalManager;
-import com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterInstance;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import com.mojang.serialization.Codec;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 
 // 工程基类：统一管理女仆工作工程的基础设施
@@ -25,13 +22,12 @@ import net.minecraft.world.level.Level;
 //   - targetBlocks 目标方块坐标缓存（所有工程共用）
 //   - participants 参与女仆列表（支持多人协作）
 //   - maxParticipants 人数上限（由子类设定）
-//   - loaded 加载状态（区块卸载时休眠，避免无效检查）
 //   - contributions 贡献记录（用于掉落物分配）
 //   - isCacheStale() 缓存空洞检测（遍历 targetBlocks + isValidTarget）
-//   - shouldRetainParticipant() 参与者保留判定（实体存在性 + 区块卸载保护）
+//
+// 参与者席位管理归中心（ProjectCenterInstance.doProjectTick），本类不判定实体存在性
 //
 // 子类通过实现以下抽象方法定义具体行为：
-//   - isActive()       判断女仆是否仍在进行本工程
 //   - isCompleted()    判断工程是否完成
 //   - onComplete()     工程完成时的清理/分配逻辑
 //   - getPosition()    工程绑定位置（用于距离判断、区块卸载检查）
@@ -63,13 +59,6 @@ public abstract class ProjectBase
 
     private final List<UUID> participants = new ArrayList<>();
     private final int maxParticipants;
-
-    // ===================== 加载状态 =====================
-
-    // loaded=true 表示工程处于活跃状态，ProjectServerHelper 正常检查
-    // loaded=false 表示工程所在区块已卸载，跳过检查（休眠）
-    // 女仆调用 API 或获取工程时自动重新标记为 true（唤醒）
-    private boolean loaded = true;
 
     // ===================== 目标方块缓存 =====================
 
@@ -135,24 +124,10 @@ public abstract class ProjectBase
         this.centerId = centerId;
     }
 
-    public ProjectCenterBlockEntity findCenter(ServerLevel level)
+    public ProjectCenterInstance findCenter(ServerLevel level)
     {
         if (centerId == null) return null;
-        IRegionalManager mgr = RegionalManagerRegistry.get(centerId);
-        if (mgr instanceof ProjectCenterBlockEntity be) return be;
-        return null;
-    }
-
-    // ===================== 加载状态 =====================
-
-    public boolean isLoaded()
-    {
-        return loaded;
-    }
-
-    public void setLoaded(boolean loaded)
-    {
-        this.loaded = loaded;
+        return ProjectCenterManager.get(level, centerId);
     }
 
     // ===================== 参与者 =====================
@@ -224,13 +199,6 @@ public abstract class ProjectBase
         }
     }
 
-    // 根据工程自身维度解析 ServerLevel，用于 isActive/isCacheStale 等需要世界状态的检查
-    protected ServerLevel resolveLevel(MinecraftServer server)
-    {
-        if (dimension == null || server == null) return null;
-        return server.getLevel(dimension);
-    }
-
     // ===================== 缓存验证 =====================
 
     // 遍历 targetBlocks 检查是否存在空洞（某个坐标已不是有效目标）
@@ -240,6 +208,7 @@ public abstract class ProjectBase
     {
         for (BlockPos pos : targetBlocks)
         {
+            if (!level.isLoaded(pos)) continue;
             if (!isValidTarget(level, pos))
             {
                 return true;
@@ -247,34 +216,6 @@ public abstract class ProjectBase
         }
         return false;
     }
-
-    // ===================== 参与者保留判定 =====================
-
-    // 判断是否允许保留女仆在工程的参与者席位上
-    // 供 isActive 调用，封装所有子类共用的前置判定：
-    //   - 实体存在 → 允许保留，由子类继续检查任务是否匹配
-    //   - 实体不存在但区块已卸载 → 允许保留（等待区块重载），副作用：setLoaded(false)
-    //   - 实体不存在且区块已加载 → 不允许保留（女仆真的不在了）
-    // 返回 true = 允许保留席位，返回 false = 应从参与者列表移除
-    protected boolean shouldRetainParticipant(ServerLevel level, UUID maidUuid)
-    {
-        Entity entity = level.getEntity(maidUuid);
-        if (entity != null)
-        {
-            return true;
-        }
-
-        // 实体不在 → 检查工程位置区块是否已卸载
-        if (!level.isLoaded(getPosition()))
-        {
-            setLoaded(false);
-            return true;
-        }
-
-        return false;
-    }
-
-
 
     // ===================== 贡献 =====================
 
@@ -291,10 +232,6 @@ public abstract class ProjectBase
     }
 
     // ===================== 抽象方法 =====================
-
-    // 判断指定女仆是否仍在进行本工程
-    // 由子类实现具体判定逻辑（如砍树工程检查女仆是否在砍树任务中且目标是自己）
-    public abstract boolean isActive(ServerLevel level, UUID maidUuid);
 
     // 判断工程是否完成
     // 计数型：进度达到任务量；执行型：无剩余可操作目标

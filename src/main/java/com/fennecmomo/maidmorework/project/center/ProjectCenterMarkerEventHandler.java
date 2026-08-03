@@ -1,7 +1,5 @@
 package com.fennecmomo.maidmorework.project.center;
 
-import com.fennecmomo.maidmorework.lib.region.IRegionalManager;
-import com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -62,8 +60,10 @@ public class ProjectCenterMarkerEventHandler
         }
 
         UUID boundId = ProjectCenterMarkerItem.getBoundId(stack);
-        IRegionalManager manager = RegionalManagerRegistry.get(boundId);
-        if (!(manager instanceof ProjectCenterBlockEntity be))
+        if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)) return;
+
+        ProjectCenterInstance center = ProjectCenterManager.get(serverLevel, boundId);
+        if (center == null)
         {
             player.sendSystemMessage(Component.literal(
                     "§c绑定的管理器已失效，请重新绑定"));
@@ -73,7 +73,8 @@ public class ProjectCenterMarkerEventHandler
         if (player instanceof ServerPlayer sp)
         {
             var payload = new ProjectCenterEditPayload(
-                    be.getId(), be.getBlockPos(), be.getRadius(), be.getAnchor(), be.getProjectTypeId());
+                    center.getId(), center.getBlockPos(), center.getRadius(),
+                    center.getAnchor(), center.getProjectTypeId());
             PacketDistributor.sendToPlayer(sp, payload);
         }
     }

@@ -7,7 +7,7 @@ import java.util.UUID;
 import com.fennecmomo.maidmorework.MaidMoreWork;
 import com.fennecmomo.maidmorework.project.CountingProject;
 import com.fennecmomo.maidmorework.project.ProjectBase;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -69,7 +69,7 @@ public record ProjectHudPayload(List<Entry> entries) implements CustomPacketPayl
     public static ProjectHudPayload buildAll()
     {
         List<Entry> list = new ArrayList<>();
-        for (ProjectBase p : ProjectCenterBlockEntity.getAllProjects())
+        for (ProjectBase p : ProjectCenterManager.getAllProjects())
         {
             list.add(Entry.from(p));
         }

@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
-public record ProjectCenterInfoPayload(BlockPos centerPos, String typeName, int projectCount, int maidCount) implements CustomPacketPayload
+public record ProjectCenterInfoPayload(BlockPos centerPos, String typeName, int projectCount, int maidCount, int radius) implements CustomPacketPayload
 {
     public static final Type<ProjectCenterInfoPayload> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath(MaidMoreWork.MODID, "project_center_info"));
@@ -22,6 +22,7 @@ public record ProjectCenterInfoPayload(BlockPos centerPos, String typeName, int 
                     ByteBufCodecs.STRING_UTF8, ProjectCenterInfoPayload::typeName,
                     ByteBufCodecs.INT, ProjectCenterInfoPayload::projectCount,
                     ByteBufCodecs.INT, ProjectCenterInfoPayload::maidCount,
+                    ByteBufCodecs.INT, ProjectCenterInfoPayload::radius,
                     ProjectCenterInfoPayload::new
             );
 }

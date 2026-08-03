@@ -83,9 +83,9 @@ public final class MaidBubbleHelper
 
     // ===================== 便利 API =====================
 
-    public void setFollowWarn(EntityMaid maid)
+    // 跟随模式拦截提示：action 为动作名（如"挖矿"/"砍树"），由行为方直接传入
+    public void setFollowWarn(String action)
     {
-        String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("工作");
         set("跟随模式下无法" + action + "，请开启Home模式", MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
     }
 

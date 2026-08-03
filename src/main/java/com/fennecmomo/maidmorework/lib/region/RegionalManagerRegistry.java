@@ -29,4 +29,9 @@ public final class RegionalManagerRegistry
     {
         return MANAGERS.values();
     }
+
+    public static void clear()
+    {
+        MANAGERS.clear();
+    }
 }

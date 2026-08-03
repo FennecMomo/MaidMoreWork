@@ -12,12 +12,14 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 @RegProjectType
 public class ChoppingProjectType implements IProjectType
@@ -63,5 +65,11 @@ public class ChoppingProjectType implements IProjectType
     public ProjectBase createProject(UUID id, BlockPos rootPos, List<BlockPos> targets)
     {
         return new ChoppingProject(rootPos, targets);
+    }
+
+    @Override
+    public Predicate<BlockState> stateFilter()
+    {
+        return state -> state.is(BlockTags.LOGS);
     }
 }

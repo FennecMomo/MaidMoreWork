@@ -53,6 +53,6 @@ public final class MaidMoreWorkConfig
 
     // ===================== ProjectCenter =====================
 
-    public static final int REFRESH_INTERVAL_MINUTES = 10;
-    public static final int SCAN_BLOCKS_PER_TICK = 512;
+    // 全量扫描刷新间隔（tick），5 秒一刷；findBlocks 瞬间完成
+    public static final long REFRESH_INTERVAL_TICKS = 100;
 }

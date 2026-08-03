@@ -6,12 +6,14 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 public interface IProjectType
 {
@@ -32,4 +34,9 @@ public interface IProjectType
     }
 
     ProjectBase createProject(UUID id, BlockPos rootPos, List<BlockPos> targets);
+
+    default Predicate<BlockState> stateFilter()
+    {
+        return state -> false;
+    }
 }

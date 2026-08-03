@@ -54,18 +54,14 @@ public class MiningTask implements IMaidTask
     public boolean enableLookAndRandomWalk(EntityMaid maid) { return false; }
 
     // 组装行为列表：SearchBehavior(找矿井) + MiningBehavior(挖矿)
-    // 写入工作关键词到 Memory 和 Attachment，供气泡框显示和重启恢复
     @Override
     public List<Pair<Integer, BehaviorControl<? super EntityMaid>>> createBrainTasks(EntityMaid maid)
     {
-        // 写入工作关键词，供 SearchBehavior 拼气泡文案（如 "家园范围内没有可用的矿井"）
-        maid.getBrain().setMemory(ModMemories.WORK_ACTION.get(), "挖矿");
-        maid.getBrain().setMemory(ModMemories.WORK_TARGET.get(), "矿井");
-
         List<Pair<Integer, BehaviorControl<? super EntityMaid>>> tasks = new ArrayList<>();
         // SearchBehavior 负责螺旋遍历坐标，找到矿井方块后停止
         // 参数：scanAction=scanForOre, 搜索范围=15格XZ/1格下/14格上, 受家园限制
-        tasks.add(Pair.of(5, new SearchBehavior(this::scanForOre, ModMemories.LOG_BLOCKS.get(), 15, 1, 14, true)));
+        tasks.add(Pair.of(5, new SearchBehavior(this::scanForOre, "挖矿", "矿井",
+                ModMemories.LOG_BLOCKS.get(), 15, 1, 14, true)));
         // MiningBehavior 负责到达矿井后执行挖矿任务
         tasks.add(Pair.of(6, new MiningBehavior()));
         return tasks;

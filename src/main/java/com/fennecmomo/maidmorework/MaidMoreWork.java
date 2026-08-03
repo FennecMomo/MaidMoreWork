@@ -5,14 +5,13 @@ import com.fennecmomo.maidmorework.mining.MineCommand;
 import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterActivationHud;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterBlockEntity;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterCommand;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditHud;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterInfoPayload;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
-import com.fennecmomo.maidmorework.project.center.ProjectCenterScanPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
@@ -20,12 +19,14 @@ import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
@@ -107,22 +108,21 @@ public class MaidMoreWork
                     }
             );
             registrar.playToClient(
-                    ProjectCenterScanPayload.TYPE,
-                    ProjectCenterScanPayload.STREAM_CODEC,
-                    (payload, context) -> {
-                        ProjectClientHelper.scanCenterPos = payload.centerPos();
-                        ProjectClientHelper.scanCursor = payload.cursor();
-                        ProjectClientHelper.scanTotal = payload.total();
-                    }
-            );
-            registrar.playToClient(
                     ProjectCenterInfoPayload.TYPE,
                     ProjectCenterInfoPayload.STREAM_CODEC,
                     (payload, context) -> {
-                        ProjectClientHelper.infoCenterPos = payload.centerPos();
-                        ProjectClientHelper.infoTypeName = payload.typeName();
-                        ProjectClientHelper.infoProjectCount = payload.projectCount();
-                        ProjectClientHelper.infoMaidCount = payload.maidCount();
+                        if (payload.typeName().isEmpty())
+                        {
+                            ProjectClientHelper.infoCenterPos = null;
+                        }
+                        else
+                        {
+                            ProjectClientHelper.infoCenterPos = payload.centerPos();
+                            ProjectClientHelper.infoTypeName = payload.typeName();
+                            ProjectClientHelper.infoProjectCount = payload.projectCount();
+                            ProjectClientHelper.infoMaidCount = payload.maidCount();
+                            ProjectClientHelper.infoRadius = payload.radius();
+                        }
                     }
             );
             registrar.playToServer(
@@ -130,7 +130,7 @@ public class MaidMoreWork
                     ProjectHudQueryPayload.STREAM_CODEC,
                     (payload, context) -> {
                         ServerPlayer player = (ServerPlayer) context.player();
-                        ProjectHudPayload response = ProjectCenterBlockEntity.getNearby(player, 32);
+                        ProjectHudPayload response = ProjectCenterManager.getNearby(player, 32);
                         PacketDistributor.sendToPlayer(player, response);
                     }
             );
@@ -139,9 +139,33 @@ public class MaidMoreWork
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(ProjectCenterCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
-        // 女仆被拾取/收起时自动退出当前工程，避免参与者残留
+        // 全局工程中心调度：由服务端心跳驱动，与区块加载无关
+        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> {
+            for (ServerLevel level : e.getServer().getAllLevels())
+            {
+                ProjectCenterManager.tick(level);
+            }
+        });
+        // 女仆被拾取/收起时：释放工程席位 + 完整脱离中心（中断协议）
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
-                ProjectCenterBlockEntity.releaseMaid(e.getMaid());
+                ProjectCenterManager.releaseMaid(e.getMaid());
+        });
+        // 服务端停止时清理静态注册表，避免跨世界残留
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> {
+                ProjectCenterManager.clearAll();
+                com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry.clear();
+        });
+        // 世界卸载时清理：服务端丢弃维度索引，客户端清空 HUD 与渲染视图
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.LevelEvent.Unload e) -> {
+                if (e.getLevel().isClientSide())
+                {
+                    ProjectClientHelper.clear();
+                    com.fennecmomo.maidmorework.lib.region.RegionalManagerRegistry.clear();
+                }
+                else if (e.getLevel() instanceof net.minecraft.world.level.Level level)
+                {
+                    ProjectCenterManager.onLevelUnload(level);
+                }
         });
     }
 

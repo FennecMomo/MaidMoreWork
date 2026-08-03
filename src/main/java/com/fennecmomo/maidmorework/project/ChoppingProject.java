@@ -1,7 +1,6 @@
 package com.fennecmomo.maidmorework.project;
 
 import com.fennecmomo.maidmorework.MaidMoreWorkConfig;
-import com.fennecmomo.maidmorework.ModMemories;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
@@ -26,14 +25,9 @@ import java.util.Set;
 import java.util.UUID;
 
 // 砍树工程（计数型）：CountingProject 提供通用计数推进 + 贡献分配
-// 本类只包含砍树特有业务：树脚坐标、BFS 搜索、原木标签判定、isActive 砍树任务链
+// 本类只包含砍树特有业务：树脚坐标、BFS 搜索、原木标签判定
 //
 // 树叶由原版自然腐栏机制清理，工程不管理
-//
-// isActive 判定链：
-//   1. shouldRetainParticipant（基类）：实体存在性 + 区块卸载保护
-//   2. 女仆是否仍在砍树任务中
-//   3. 女仆的目标工程是否是自己
 public class ChoppingProject extends CountingProject
 {
     // 砍树工程只允许一人参与
@@ -115,10 +109,10 @@ public class ChoppingProject extends CountingProject
     @Override
     protected double getProgressIncrement(ServerLevel level, BlockPos pos, EntityMaid maid)
     {
+        if (!level.isLoaded(pos)) return 1.0;
         BlockState state = level.getBlockState(pos);
         float destroySpeed = maid.getMainHandItem().getDestroySpeed(state);
         float hardness = state.getDestroySpeed(level, pos);
-        // 原版每 tick 进度 = destroySpeed / (hardness * 30)
         return destroySpeed * MaidMoreWorkConfig.CHOP_INTERVAL / (hardness * 30);
     }
 
@@ -128,6 +122,12 @@ public class ChoppingProject extends CountingProject
     @Override
     protected boolean rebuild(ServerLevel level)
     {
+        // 根部区块未加载时无法验证，跳过本次重建（避免误判完成）
+        if (!level.isLoaded(rootPos))
+        {
+            return true;
+        }
+
         // 优先从 rootPos 开始 BFS
         BlockPos start;
         if (level.getBlockState(rootPos).is(BlockTags.LOGS))
@@ -171,32 +171,6 @@ public class ChoppingProject extends CountingProject
         return !newLogs.isEmpty();
     }
 
-    // ===================== isActive 判定 =====================
-
-    @Override
-    public boolean isActive(ServerLevel level, UUID maidUuid)
-    {
-        if (!shouldRetainParticipant(level, maidUuid))
-        {
-            return false;
-        }
-
-        EntityMaid maid = (EntityMaid) level.getEntity(maidUuid);
-        if (maid == null)
-        {
-            return true;
-        }
-
-        String action = maid.getBrain().getMemory(ModMemories.WORK_ACTION.get()).orElse("");
-        if (!ModMemories.WORK_ACTION_CHOPPING.equals(action))
-        {
-            return false;
-        }
-
-        UUID projectUuid = maid.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
-        return getId().equals(projectUuid);
-    }
-
     // ===================== 完成回调 =====================
 
     // 工程完成时的清理逻辑（由 ProjectServerHelper 调用）
@@ -220,6 +194,7 @@ public class ChoppingProject extends CountingProject
         while (!queue.isEmpty())
         {
             BlockPos p = queue.poll();
+            if (!level.isLoaded(p)) continue;
             BlockState state = level.getBlockState(p);
             if (state.is(BlockTags.LOGS))
             {
@@ -227,7 +202,8 @@ public class ChoppingProject extends CountingProject
                 for (Direction d : Direction.values())
                 {
                     BlockPos nb = p.relative(d);
-                    if (!visited.contains(nb) && level.getBlockState(nb).is(BlockTags.LOGS))
+                    if (!visited.contains(nb) && level.isLoaded(nb)
+                            && level.getBlockState(nb).is(BlockTags.LOGS))
                     {
                         visited.add(nb);
                         queue.add(nb);
