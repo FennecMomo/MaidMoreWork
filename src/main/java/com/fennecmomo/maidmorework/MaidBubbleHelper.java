@@ -83,10 +83,11 @@ public final class MaidBubbleHelper
 
     // ===================== 便利 API =====================
 
-    // 跟随模式拦截提示：action 为动作名（如"挖矿"/"砍树"），由行为方直接传入
+    // 跟随模式提醒气泡：action 为动作名（如"挖矿"/"伐木"），由行为方直接传入
     public void setFollowWarn(String action)
     {
-        set("跟随模式下无法" + action + "，请开启Home模式", MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
+        set("主人，需要我在这附近" + action + "吗？\n（女仆工作需开启Home模式）",
+                MaidMoreWorkConfig.BUBBLE_DURATION_TICKS);
     }
 
     // ===================== tick =====================

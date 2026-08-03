@@ -15,8 +15,10 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -44,6 +46,9 @@ public final class ProjectCenterManager
 
     // 工程注册表（跨维度，UUID 索引）
     private static final Map<UUID, ProjectBase> ALL_PROJECTS = new ConcurrentHashMap<>();
+
+    // 孤儿清扫节流（每 200 tick 一次）
+    private static int sweepCounter = 0;
 
     // 关服标志：服务器停止、维度卸载时置位，方块实体的 setRemoved 不再触发 deleteById
     // （退出序列中 BE.setRemoved 会被触发，若先于保存编码执行会清空内存数据导致空档）
@@ -92,6 +97,45 @@ public final class ProjectCenterManager
         }
         // 快照式同步：byId 是唯一真相，data 只是持久化投影，保存内容永远来自管理器
         e.data().sync(e.byId());
+
+        // 孤儿清扫：每 200 tick 清理无人认领的个人工程（centerId == null），
+        // 防止 chunk 卸载/切任务时行为实例被丢弃导致残留刷屏
+        if (++sweepCounter % 200 == 0)
+        {
+            sweepOrphanProjects(level);
+        }
+    }
+
+    // 清理当前维度内已失联的个人工程：
+    //   owner（参与者第一个）实体不存在，或其 PROJECT_UUID memory 不再指向该工程 → 注销
+    private static void sweepOrphanProjects(ServerLevel level)
+    {
+        List<UUID> toRemove = new ArrayList<>();
+        for (ProjectBase p : ALL_PROJECTS.values())
+        {
+            if (p.getCenterId() != null) continue;
+            if (p.getDimension() == null || !p.getDimension().equals(level.dimension())) continue;
+            if (p.getParticipants().isEmpty())
+            {
+                toRemove.add(p.getId());
+                continue;
+            }
+            EntityMaid owner = level.getEntity(p.getParticipants().get(0)) instanceof EntityMaid m ? m : null;
+            if (owner == null)
+            {
+                toRemove.add(p.getId());
+                continue;
+            }
+            UUID memory = owner.getBrain().getMemory(ModMemories.PROJECT_UUID.get()).orElse(null);
+            if (!p.getId().equals(memory))
+            {
+                toRemove.add(p.getId());
+            }
+        }
+        for (UUID id : toRemove)
+        {
+            unregisterProject(id);
+        }
     }
 
     // 自我锚定：每次 tick 重新取存储缓存对象，与 Entry.data 比对
@@ -150,7 +194,7 @@ public final class ProjectCenterManager
         }
         // 客户端清空信息面板
         PacketDistributor.sendToAllPlayers(
-                new ProjectCenterInfoPayload(removed.getBlockPos(), "", 0, 0, 0));
+                new ProjectCenterInfoPayload(removed.getBlockPos(), "", 0, 0, 0, ""));
     }
 
     // 方块实体加载时确保实例存在（SavedData 意外丢失时按身份重建）
@@ -186,7 +230,8 @@ public final class ProjectCenterManager
         return get(level, uuid);
     }
 
-    // 距离女仆最近的已激活中心
+    // 距离女仆最近的、在她家园范围内的已激活中心
+    // 距离约束：女仆的工作范围 = 家园范围（getHomeRadius），超出即"附近没有中心"
     public static ProjectCenterInstance findNearestActive(EntityMaid maid)
     {
         if (!(maid.level() instanceof ServerLevel level)) return null;
@@ -196,6 +241,7 @@ public final class ProjectCenterManager
         for (ProjectCenterInstance c : entry(level).byId().values())
         {
             if (c.getProjectTypeId().isEmpty()) continue;
+            if (!isWithinMaidRange(maid, c.getBlockPos())) continue;
             double dist = maidPos.distSqr(c.getBlockPos());
             if (dist < bestDist)
             {
@@ -204,6 +250,17 @@ public final class ProjectCenterManager
             }
         }
         return best;
+    }
+
+    // 女仆当前位置与中心位置的 XZ 距离是否在她家园范围内（工作范围 = 家园范围）
+    // 下限 8 防呆（防 0 半径导致永远判离开）
+    public static boolean isWithinMaidRange(EntityMaid maid, BlockPos centerPos)
+    {
+        int range = Math.max(maid.getHomeRadius(), 8);
+        BlockPos maidPos = maid.blockPosition();
+        double dx = maidPos.getX() - centerPos.getX();
+        double dz = maidPos.getZ() - centerPos.getZ();
+        return dx * dx + dz * dz <= (double) range * range;
     }
 
     // ===================== 工程注册表 =====================
@@ -230,6 +287,33 @@ public final class ProjectCenterManager
     public static Collection<ProjectBase> getAllProjects()
     {
         return ALL_PROJECTS.values();
+    }
+
+    // ===================== 占用快照 =====================
+
+    // 收集当前维度所有"已被占用"的目标块：中心进行中工程（activeTargets）∪ 个人工程（targetBlocks）
+    // 即时快照，用完即弃，不持久化、不常驻——永远反映当下状态，工程完工/放弃后自动消失
+    // 供个人检索跳过、整树校验、中心扫描跳过、分配兜底共用
+    public static Set<BlockPos> collectOccupied(ServerLevel level)
+    {
+        Set<BlockPos> out = new HashSet<>();
+        Entry e = ENTRIES.get(level.dimension());
+        if (e != null)
+        {
+            for (ProjectCenterInstance center : e.byId().values())
+            {
+                out.addAll(center.getActiveTargets());
+            }
+        }
+        for (ProjectBase p : ALL_PROJECTS.values())
+        {
+            if (p.getCenterId() == null && p.getDimension() != null
+                    && p.getDimension().equals(level.dimension()))
+            {
+                out.addAll(p.getTargetBlocks());
+            }
+        }
+        return out;
     }
 
     public static void removeByProject(ServerLevel level, ProjectBase project, boolean completed)

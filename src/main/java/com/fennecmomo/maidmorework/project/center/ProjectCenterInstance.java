@@ -44,6 +44,9 @@ public class ProjectCenterInstance
 {
     // ===================== 多态序列化 =====================
 
+    // 中心默认名（未命名/旧存档回落）
+    public static final String DEFAULT_CENTER_NAME = "场地";
+
     public static final MapCodec<ProjectCenterInstance> MAP_CODEC =
         RecordCodecBuilder.mapCodec(inst -> inst.group(
             UUIDUtil.CODEC.fieldOf("id").forGetter(ProjectCenterInstance::getId),
@@ -51,6 +54,8 @@ public class ProjectCenterInstance
             BlockPos.CODEC.fieldOf("blockPos").forGetter(ProjectCenterInstance::getBlockPos),
             Codec.INT.fieldOf("radius").forGetter(ProjectCenterInstance::getRadius),
             Codec.INT.fieldOf("anchor").forGetter(ProjectCenterInstance::getAnchor),
+            Codec.STRING.optionalFieldOf("name", DEFAULT_CENTER_NAME)
+                    .forGetter(ProjectCenterInstance::getName),
             Codec.STRING.fieldOf("projectTypeId").forGetter(ProjectCenterInstance::getProjectTypeId),
             Codec.BOOL.fieldOf("boundaryVisible").forGetter(ProjectCenterInstance::isBoundaryVisible),
             BlockPos.CODEC.listOf().fieldOf("inactiveTargets")
@@ -72,13 +77,13 @@ public class ProjectCenterInstance
     // Codec 工厂方法：从反序列化字段构建实例
     private static ProjectCenterInstance fromCodec(
         UUID id, UUID owner, BlockPos blockPos,
-        int radius, int anchor, String projectTypeId, boolean boundaryVisible,
+        int radius, int anchor, String name, String projectTypeId, boolean boundaryVisible,
         List<BlockPos> inactive, List<BlockPos> active, List<ProjectBase> projects,
         List<AssignmentEntry> assignments, List<SavedHomeEntry> savedHomes,
         List<PendingDestroyEntry> pendingDestroy)
     {
         return new ProjectCenterInstance(id, owner, blockPos, radius, anchor,
-                projectTypeId, boundaryVisible, inactive, active, projects,
+                name, projectTypeId, boundaryVisible, inactive, active, projects,
                 assignments, savedHomes, pendingDestroy);
     }
 
@@ -147,6 +152,7 @@ public class ProjectCenterInstance
     private final BlockPos blockPos;
     private int radius;
     private int anchor;
+    private String name = DEFAULT_CENTER_NAME;
     private String projectTypeId;
     private boolean boundaryVisible;
 
@@ -191,12 +197,14 @@ public class ProjectCenterInstance
 
     // Codec 反序列化构造：指定全部字段
     private ProjectCenterInstance(UUID id, UUID owner, BlockPos blockPos,
-                                  int radius, int anchor, String projectTypeId, boolean boundaryVisible,
+                                  int radius, int anchor, String name,
+                                  String projectTypeId, boolean boundaryVisible,
                                   List<BlockPos> inactive, List<BlockPos> active, List<ProjectBase> projects,
                                   List<AssignmentEntry> assignments, List<SavedHomeEntry> savedHomes,
                                   List<PendingDestroyEntry> pendingDestroy)
     {
         this(id, owner, blockPos, radius, anchor);
+        this.name = name == null || name.isEmpty() ? DEFAULT_CENTER_NAME : name;
         this.projectTypeId = projectTypeId;
         this.boundaryVisible = boundaryVisible;
         this.inactiveTargets.addAll(inactive);
@@ -269,7 +277,7 @@ public class ProjectCenterInstance
             }
         }
 
-        BlockPos nearest = findNearestInactive(maid.blockPosition());
+        BlockPos nearest = findNearestInactive(level, maid.blockPosition());
         if (nearest == null) return null;
 
         IProjectType type = ProjectTypeRegistry.get(projectTypeId);
@@ -304,12 +312,18 @@ public class ProjectCenterInstance
         }
     }
 
-    private BlockPos findNearestInactive(BlockPos from)
+    // 找最近的未占用 inactive 目标（兜底跳过已被个人工程等占用的块，防 5 秒扫描窗口冲突）
+    private BlockPos findNearestInactive(ServerLevel level, BlockPos from)
     {
+        Set<BlockPos> occupied = ProjectCenterManager.collectOccupied(level);
         BlockPos nearest = null;
         double bestDist = Double.MAX_VALUE;
         for (BlockPos p : inactiveTargets)
         {
+            if (occupied.contains(p))
+            {
+                continue;
+            }
             double dist = p.distSqr(from);
             if (dist < bestDist)
             {
@@ -388,6 +402,9 @@ public class ProjectCenterInstance
         if (type == null) return;
         if (!isAreaLoaded(level)) return;
 
+        // 跳过已被占用（其他中心进行中工程 + 个人工程）的块：个人女仆的树不进本中心任务池，
+        // 顺带修复两个重叠中心抢同一棵树的问题
+        Set<BlockPos> occupied = ProjectCenterManager.collectOccupied(level);
         Predicate<BlockState> filter = type.stateFilter();
         Set<BlockPos> active = activeTargets;
 
@@ -399,6 +416,7 @@ public class ProjectCenterInstance
                 {
                     BlockPos immutable = pos.immutable();
                     if (!contains(immutable)) return;
+                    if (occupied.contains(immutable)) return;
                     if (!active.contains(immutable))
                     {
                         inactiveTargets.add(immutable);
@@ -551,7 +569,7 @@ public class ProjectCenterInstance
                 IProjectType type = ProjectTypeRegistry.get(projectTypeId);
                 String typeName = type != null ? type.displayName().getString() : projectTypeId;
                 var info = new ProjectCenterInfoPayload(
-                        getBlockPos(), typeName, managedProjects.size(), savedHomes.size(), getRadius());
+                        getBlockPos(), typeName, managedProjects.size(), savedHomes.size(), getRadius(), getName());
                 PacketDistributor.sendToAllPlayers(info);
             }
         }
@@ -567,16 +585,28 @@ public class ProjectCenterInstance
     public BlockPos getBlockPos() { return blockPos; }
     public int getRadius() { return radius; }
     public int getAnchor() { return anchor; }
+    public String getName() { return name; }
     public String getProjectTypeId() { return projectTypeId; }
     public boolean isBoundaryVisible() { return boundaryVisible; }
     public int getInactiveCount() { return inactiveTargets.size(); }
     public int getManagedProjectCount() { return managedProjects.size(); }
     public int getActiveCount() { return activeTargets.size(); }
+    public Set<BlockPos> getActiveTargets() { return activeTargets; }
     public List<ProjectBase> getManagedProjects() { return managedProjects; }
 
     public void setBoundaryVisible(boolean visible)
     {
         this.boundaryVisible = visible;
+    }
+
+    // 中心命名（限 16 字符）
+    public void setName(String name)
+    {
+        if (name == null || name.isEmpty())
+        {
+            return;
+        }
+        this.name = name.length() > 16 ? name.substring(0, 16) : name;
     }
 
     public void setRadius(int radius)

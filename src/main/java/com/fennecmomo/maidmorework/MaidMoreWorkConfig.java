@@ -9,7 +9,8 @@ public final class MaidMoreWorkConfig
     // ===================== SearchBehavior =====================
 
     public static final int SILENCE_TICKS = 10;
-    public static final int BUBBLE_DURATION_TICKS = 40;
+    // 空闲提示气泡时长（tick），3 秒展示
+    public static final int BUBBLE_DURATION_TICKS = 60;
     // 螺旋耗尽后随机游荡的距离范围
     public static final double SEARCH_ROAM_MIN_DIST = 20.0;
     public static final double SEARCH_ROAM_MAX_DIST = 35.0;
@@ -27,6 +28,8 @@ public final class MaidMoreWorkConfig
     public static final double ROAM_MIN_DIST = 10.0;
     public static final double ROAM_MAX_RANGE = 10.0;
     public static final double ROAM_SPEED = 0.3;
+    // 无中心自检索/空闲气泡的节流间隔（tick），5 秒一次
+    public static final long PERSONAL_SEARCH_CD_TICKS = 100;
 
     // ===================== LoggingTask =====================
 

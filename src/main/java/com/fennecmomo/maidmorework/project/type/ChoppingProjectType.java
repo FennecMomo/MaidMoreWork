@@ -34,6 +34,12 @@ public class ChoppingProjectType implements IProjectType
     }
 
     @Override
+    public Component targetName()
+    {
+        return Component.translatable("projecttype.maidmorework.chopping.target");
+    }
+
+    @Override
     public ItemStack icon() { return Items.IRON_AXE.getDefaultInstance(); }
 
     @Override

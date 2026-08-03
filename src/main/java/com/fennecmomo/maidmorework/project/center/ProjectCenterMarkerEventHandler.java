@@ -74,7 +74,7 @@ public class ProjectCenterMarkerEventHandler
         {
             var payload = new ProjectCenterEditPayload(
                     center.getId(), center.getBlockPos(), center.getRadius(),
-                    center.getAnchor(), center.getProjectTypeId());
+                    center.getAnchor(), center.getProjectTypeId(), center.getName());
             PacketDistributor.sendToPlayer(sp, payload);
         }
     }

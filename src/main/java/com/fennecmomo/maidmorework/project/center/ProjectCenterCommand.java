@@ -57,6 +57,14 @@ public class ProjectCenterCommand
                                                     String typeId = StringArgumentType.getString(ctx, "typeId");
                                                     return setType(ctx.getSource(), idStr, typeId);
                                                 }))))
+                        .then(Commands.literal("name")
+                                .then(Commands.argument("id", StringArgumentType.word())
+                                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                                                .executes(ctx -> {
+                                                    String idStr = StringArgumentType.getString(ctx, "id");
+                                                    String name = StringArgumentType.getString(ctx, "name");
+                                                    return setName(ctx.getSource(), idStr, name);
+                                                }))))
                 ));
     }
 
@@ -166,6 +174,23 @@ public class ProjectCenterCommand
         inst.setBoundaryVisible(true);
         syncIdentity(source.getLevel(), inst);
         player.sendSystemMessage(Component.literal("§a工程类型已设置为: " + typeId));
+        return 1;
+    }
+
+    private static int setName(CommandSourceStack source, String idStr, String name)
+    {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        ProjectCenterInstance inst = resolve(source, idStr);
+        if (inst == null)
+        {
+            player.sendSystemMessage(Component.literal("§c未找到工程中心"));
+            return 0;
+        }
+
+        inst.setName(name);
+        player.sendSystemMessage(Component.literal("§a工程中心已命名为: " + inst.getName()));
         return 1;
     }
 }

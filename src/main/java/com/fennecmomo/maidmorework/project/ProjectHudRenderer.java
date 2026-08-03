@@ -61,6 +61,7 @@ public final class ProjectHudRenderer
         ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
 
         List<Component> lines = new ArrayList<>();
+        lines.add(Component.literal(ProjectClientHelper.infoCenterName));
         lines.add(Component.literal("运行正常"));
         lines.add(Component.literal(ProjectClientHelper.infoTypeName));
         lines.add(Component.literal("大小: " + ProjectClientHelper.infoRadius));

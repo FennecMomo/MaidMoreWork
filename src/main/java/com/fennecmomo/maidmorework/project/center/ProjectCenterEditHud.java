@@ -15,21 +15,24 @@ public class ProjectCenterEditHud extends Screen
     private final UUID centerId;
     private final BlockPos centerPos;
     private final int initialRadius;
+    private final String initialName;
     private EditBox radiusInput;
+    private EditBox nameInput;
     private int anchor;
 
     public static void open(ProjectCenterEditPayload payload)
     {
         Minecraft.getInstance().setScreen(new ProjectCenterEditHud(
-                payload.centerId(), payload.centerPos(), payload.radius(), payload.anchor()));
+                payload.centerId(), payload.centerPos(), payload.radius(), payload.anchor(), payload.name()));
     }
 
-    public ProjectCenterEditHud(UUID centerId, BlockPos centerPos, int radius, int anchor)
+    public ProjectCenterEditHud(UUID centerId, BlockPos centerPos, int radius, int anchor, String name)
     {
         super(Component.empty());
         this.centerId = centerId;
         this.centerPos = centerPos;
         this.initialRadius = radius;
+        this.initialName = name;
         this.anchor = anchor;
     }
 
@@ -39,12 +42,16 @@ public class ProjectCenterEditHud extends Screen
         int cx = this.width / 2;
         int y = 5;
 
-        this.radiusInput = new EditBox(this.font, cx + 10, y, 50, 20, Component.empty());
+        this.nameInput = new EditBox(this.font, cx - 80, y, 160, 20, Component.empty());
+        this.nameInput.setValue(initialName);
+        this.addRenderableWidget(this.nameInput);
+
+        this.radiusInput = new EditBox(this.font, cx + 10, y + 25, 50, 20, Component.empty());
         this.radiusInput.setValue(String.valueOf(initialRadius));
         this.radiusInput.setResponder(this::onValueChanged);
         this.addRenderableWidget(this.radiusInput);
 
-        int radioY = y + 25;
+        int radioY = y + 50;
         this.addRenderableWidget(Button.builder(Component.literal("顶部"), b -> setAnchor(0))
                 .pos(cx - 80, radioY).size(50, 20).build());
         this.addRenderableWidget(Button.builder(Component.literal("中心"), b -> setAnchor(1))
@@ -91,6 +98,11 @@ public class ProjectCenterEditHud extends Screen
         var conn = this.minecraft.player.connection;
         conn.sendCommand("maidmorework center radius " + id + " " + radiusText);
         conn.sendCommand("maidmorework center anchor " + id + " " + anchorText);
+        String nameText = nameInput.getValue();
+        if (!nameText.isEmpty())
+        {
+            conn.sendCommand("maidmorework center name " + id + " " + nameText);
+        }
         ProjectCenterBoundaryRenderer.clearPreview();
         this.onClose();
     }
@@ -128,8 +140,9 @@ public class ProjectCenterEditHud extends Screen
         super.extractRenderState(g, mx, my, pt);
 
         int cx = this.width / 2;
-        g.centeredText(this.font, Component.literal("显示半径："), cx - 36, 10, 0xFFFFFF);
-        g.centeredText(this.font, Component.literal("基准点位置："), cx, 35, 0xFFFFFF);
+        g.centeredText(this.font, Component.literal("名字："), cx - 115, 10, 0xFFFFFF);
+        g.centeredText(this.font, Component.literal("显示半径："), cx - 36, 35, 0xFFFFFF);
+        g.centeredText(this.font, Component.literal("基准点位置："), cx, 60, 0xFFFFFF);
     }
 
     @Override

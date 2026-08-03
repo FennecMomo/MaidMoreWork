@@ -25,6 +25,7 @@ public final class ProjectClientHelper
     public static int infoProjectCount = 0;
     public static int infoMaidCount = 0;
     public static int infoRadius = 0;
+    public static String infoCenterName = "";
 
     private static int queryTimer = 0;
 
@@ -65,5 +66,6 @@ public final class ProjectClientHelper
         infoProjectCount = 0;
         infoMaidCount = 0;
         infoRadius = 0;
+        infoCenterName = "";
     }
 }

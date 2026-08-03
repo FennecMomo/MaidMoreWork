@@ -122,6 +122,7 @@ public class MaidMoreWork
                             ProjectClientHelper.infoProjectCount = payload.projectCount();
                             ProjectClientHelper.infoMaidCount = payload.maidCount();
                             ProjectClientHelper.infoRadius = payload.radius();
+                            ProjectClientHelper.infoCenterName = payload.name();
                         }
                     }
             );

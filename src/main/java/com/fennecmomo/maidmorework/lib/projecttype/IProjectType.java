@@ -23,6 +23,13 @@ public interface IProjectType
     Component description();
     Identifier taskUid();
 
+    // 目标词条（如砍树→"原木"），供气泡文案等通用文案使用
+    // 未覆写时回落 displayName（动作名）
+    default Component targetName()
+    {
+        return displayName();
+    }
+
     default boolean isValidTarget(ServerLevel level, BlockPos pos)
     {
         return false;
