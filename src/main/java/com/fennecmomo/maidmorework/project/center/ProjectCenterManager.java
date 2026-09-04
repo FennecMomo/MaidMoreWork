@@ -181,6 +181,16 @@ public final class ProjectCenterManager
         e.byId().put(id, inst);
     }
 
+    // 放置矿井方块时创建矿井实例（create 的子类版，矿井放置流程调用）
+    // 竖井形状参数（两角点）由标记工具框定，随实例持久化（A1 拍板）
+    public static void createMine(ServerLevel level, UUID id, UUID owner, BlockPos pos,
+                                  int radius, int anchor, BlockPos shaftCornerNW, BlockPos shaftCornerSE)
+    {
+        Entry e = entry(level);
+        MineInstance inst = new MineInstance(id, owner, pos, radius, anchor, shaftCornerNW, shaftCornerSE);
+        e.byId().put(id, inst);
+    }
+
     // 删除中心（方块拆除时由 BE.setRemoved 调用，幂等；关服流程中不执行）
     public static void deleteById(ServerLevel level, UUID id)
     {

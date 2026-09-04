@@ -7,7 +7,10 @@ import com.fennecmomo.maidmorework.lib.projecttype.IProjectType;
 import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import com.fennecmomo.maidmorework.project.ProjectBase;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
+import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
+import com.mojang.serialization.DynamicOps;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
@@ -15,6 +18,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.network.PacketDistributor;
 
@@ -22,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,10 +74,54 @@ public class ProjectCenterInstance
             SavedHomeEntry.CODEC.listOf().fieldOf("savedHomes")
                     .forGetter(ProjectCenterInstance::encodeSavedHomes),
             PendingDestroyEntry.CODEC.listOf().fieldOf("pendingDestroy")
-                    .forGetter(ProjectCenterInstance::encodePendingDestroy)
+                    .forGetter(ProjectCenterInstance::encodePendingDestroy),
+            ItemStack.CODEC.listOf().optionalFieldOf("warehouse", List.of())
+                    .forGetter(c -> new ArrayList<>(c.warehouse)),
+            BlockPos.CODEC.listOf().optionalFieldOf("difficultyTable", List.of())
+                    .forGetter(c -> new ArrayList<>(c.difficultyTable))
         ).apply(inst, ProjectCenterInstance::fromCodec));
 
-    public static final Codec<ProjectCenterInstance> CODEC = MAP_CODEC.codec();
+    // kind 常量：多态分派标签（"center"=普通中心，"mine"=矿井子类）
+    public static final String KIND_CENTER = "center";
+    public static final String KIND_MINE = "mine";
+
+    // 多态序列化（照抄 ProjectBase.CODEC 的分派思路，但 kind 键可选、缺省回落普通中心）：
+    //   - 编码：按实例实际 kind 选子类编码器，字段写完后补写 kind 键
+    //   - 解码：先读 kind（旧存档无该键 → 回落 "center"，保证既有存档无损），再按 kind 选子类解码器
+    //   - 不用 Codec.STRING.dispatch 是因为 dispatch 的 kind 键必填，旧存档会解码失败
+    //   - 编解码用显式泛型静态方法 + 方法引用，规避 Codec.of 处 lambda 的泛型推断问题
+    public static final Codec<ProjectCenterInstance> CODEC =
+        Codec.of(ProjectCenterInstance::encodePolymorphic, ProjectCenterInstance::decodePolymorphic);
+
+    // 按 kind 取对应子类的编码器/解码器
+    @SuppressWarnings("unchecked")
+    private static MapCodec<ProjectCenterInstance> codecFor(String kind)
+    {
+        return switch (kind)
+        {
+            case KIND_MINE -> (MapCodec<ProjectCenterInstance>) (MapCodec<?>) MineInstance.MAP_CODEC;
+            default -> ProjectCenterInstance.MAP_CODEC;
+        };
+    }
+
+    // 多态编码：先按 kind 选子类编码器写字段，再补写 kind 键
+    private static <T> DataResult<T> encodePolymorphic(ProjectCenterInstance instance, DynamicOps<T> ops, T prefix)
+    {
+        return codecFor(instance.kind()).codec().encode(instance, ops, prefix)
+                .map(encoded -> ops.set(encoded, "kind", ops.createString(instance.kind())));
+    }
+
+    // 多态解码：先读 kind（缺省 "center"，兼容旧存档），再按 kind 选子类解码器
+    private static <T> DataResult<Pair<ProjectCenterInstance, T>> decodePolymorphic(DynamicOps<T> ops, T input)
+    {
+        String kind = Codec.STRING.optionalFieldOf("kind", KIND_CENTER).codec()
+                .decode(ops, input)
+                .result()
+                .map(Pair::getFirst)
+                .orElse(KIND_CENTER);
+        // MapDecoder.decode 在本 DFU 版本接收 MapLike，走 Codec 层解码原始 T
+        return codecFor(kind).codec().decode(ops, input).map(pair -> Pair.of(pair.getFirst(), input));
+    }
 
     // Codec 工厂方法：从反序列化字段构建实例
     private static ProjectCenterInstance fromCodec(
@@ -80,11 +129,12 @@ public class ProjectCenterInstance
         int radius, int anchor, String name, String projectTypeId, boolean boundaryVisible,
         List<BlockPos> inactive, List<BlockPos> active, List<ProjectBase> projects,
         List<AssignmentEntry> assignments, List<SavedHomeEntry> savedHomes,
-        List<PendingDestroyEntry> pendingDestroy)
+        List<PendingDestroyEntry> pendingDestroy,
+        List<ItemStack> warehouse, List<BlockPos> difficultyTable)
     {
         return new ProjectCenterInstance(id, owner, blockPos, radius, anchor,
                 name, projectTypeId, boundaryVisible, inactive, active, projects,
-                assignments, savedHomes, pendingDestroy);
+                assignments, savedHomes, pendingDestroy, warehouse, difficultyTable);
     }
 
     // ===================== Map 持久化辅助 =====================
@@ -115,7 +165,7 @@ public class ProjectCenterInstance
         ).apply(inst, PendingDestroyEntry::new));
     }
 
-    private List<AssignmentEntry> encodeAssignments()
+    protected List<AssignmentEntry> encodeAssignments()
     {
         List<AssignmentEntry> list = new ArrayList<>(assignments.size());
         for (var e : assignments.entrySet())
@@ -125,7 +175,7 @@ public class ProjectCenterInstance
         return list;
     }
 
-    private List<SavedHomeEntry> encodeSavedHomes()
+    protected List<SavedHomeEntry> encodeSavedHomes()
     {
         List<SavedHomeEntry> list = new ArrayList<>(savedHomes.size());
         for (var e : savedHomes.entrySet())
@@ -135,7 +185,7 @@ public class ProjectCenterInstance
         return list;
     }
 
-    private List<PendingDestroyEntry> encodePendingDestroy()
+    protected List<PendingDestroyEntry> encodePendingDestroy()
     {
         List<PendingDestroyEntry> list = new ArrayList<>(pendingDestroy.size());
         for (var e : pendingDestroy.entrySet())
@@ -143,6 +193,30 @@ public class ProjectCenterInstance
             list.add(new PendingDestroyEntry(e.getKey(), e.getValue()));
         }
         return list;
+    }
+
+    // 供子类 Codec 使用的未处理目标快照
+    protected List<BlockPos> snapshotInactiveTargets()
+    {
+        return new ArrayList<>(inactiveTargets);
+    }
+
+    // 供子类 Codec 使用的活动目标快照
+    protected List<BlockPos> snapshotActiveTargets()
+    {
+        return new ArrayList<>(activeTargets);
+    }
+
+    // 供子类 Codec 使用的托管工程快照
+    protected List<ProjectBase> snapshotManagedProjects()
+    {
+        return new ArrayList<>(managedProjects);
+    }
+
+    // 供子类 Codec 使用的仓库快照
+    protected List<ItemStack> snapshotWarehouse()
+    {
+        return new ArrayList<>(warehouse);
     }
 
     // ===================== 身份数据 =====================
@@ -175,6 +249,13 @@ public class ProjectCenterInstance
     // 未加载目标的延迟销毁记账（区块加载后结算）
     private final Map<BlockPos, UUID> pendingDestroy = new LinkedHashMap<>();
 
+    // 通用临时仓库（A1 拍板）：中心持有的物品列表，女仆存取 + 后续玩家面板存取，不限格数
+    // 出入库都过滤空堆，避免空堆破坏 Codec
+    private final List<ItemStack> warehouse = new ArrayList<>();
+
+    // 困难任务表（A1 拍板）：当前无法处理的坐标（如工具等级不足），任何工程类型通用
+    private final List<BlockPos> difficultyTable = new ArrayList<>();
+
     // 扫描状态
     private boolean scanInProgress = false;
     private long lastFullScanGameTime = 0;
@@ -195,13 +276,14 @@ public class ProjectCenterInstance
         recalcCorners();
     }
 
-    // Codec 反序列化构造：指定全部字段
-    private ProjectCenterInstance(UUID id, UUID owner, BlockPos blockPos,
-                                  int radius, int anchor, String name,
-                                  String projectTypeId, boolean boundaryVisible,
-                                  List<BlockPos> inactive, List<BlockPos> active, List<ProjectBase> projects,
-                                  List<AssignmentEntry> assignments, List<SavedHomeEntry> savedHomes,
-                                  List<PendingDestroyEntry> pendingDestroy)
+    // Codec 反序列化构造：指定全部字段（供子类复用，protected）
+    protected ProjectCenterInstance(UUID id, UUID owner, BlockPos blockPos,
+                                    int radius, int anchor, String name,
+                                    String projectTypeId, boolean boundaryVisible,
+                                    List<BlockPos> inactive, List<BlockPos> active, List<ProjectBase> projects,
+                                    List<AssignmentEntry> assignments, List<SavedHomeEntry> savedHomes,
+                                    List<PendingDestroyEntry> pendingDestroy,
+                                    List<ItemStack> warehouse, List<BlockPos> difficultyTable)
     {
         this(id, owner, blockPos, radius, anchor);
         this.name = name == null || name.isEmpty() ? DEFAULT_CENTER_NAME : name;
@@ -222,6 +304,39 @@ public class ProjectCenterInstance
         {
             this.pendingDestroy.put(e.pos(), e.maidUuid());
         }
+        for (ItemStack stack : warehouse)
+        {
+            if (stack != null && !stack.isEmpty())
+            {
+                this.warehouse.add(stack);
+            }
+        }
+        this.difficultyTable.addAll(difficultyTable);
+        recalcCorners();
+    }
+
+    // 拷贝构造：供子类"基类字段整体解码后再包装"的场景复用（MineInstance 的扁平组合 Codec）
+    protected ProjectCenterInstance(ProjectCenterInstance other)
+    {
+        this.id = other.id;
+        this.owner = other.owner;
+        this.blockPos = other.blockPos;
+        this.radius = other.radius;
+        this.anchor = other.anchor;
+        this.name = other.name;
+        this.projectTypeId = other.projectTypeId;
+        this.boundaryVisible = other.boundaryVisible;
+        this.inactiveTargets.addAll(other.inactiveTargets);
+        this.activeTargets.addAll(other.activeTargets);
+        this.managedProjects.addAll(other.managedProjects);
+        this.assignments.putAll(other.assignments);
+        this.savedHomes.putAll(other.savedHomes);
+        this.pendingDestroy.putAll(other.pendingDestroy);
+        this.warehouse.addAll(other.warehouse);
+        this.difficultyTable.addAll(other.difficultyTable);
+        this.scanInProgress = other.scanInProgress;
+        this.lastFullScanGameTime = other.lastFullScanGameTime;
+        this.infoTick = other.infoTick;
         recalcCorners();
     }
 
@@ -488,6 +603,98 @@ public class ProjectCenterInstance
         pendingDestroy.put(pos, maidUuid);
     }
 
+    // ===================== 通用仓库（A1 拍板：全中心通用的"工程临时仓库"） =====================
+
+    public List<ItemStack> getWarehouse()
+    {
+        return warehouse;
+    }
+
+    // 存入物品：过滤空堆，同型同组件堆尽量合并，超上限开新堆
+    public void depositToWarehouse(Collection<ItemStack> stacks)
+    {
+        for (ItemStack stack : stacks)
+        {
+            if (stack == null || stack.isEmpty()) continue;
+            ItemStack rest = stack.copy();
+            for (ItemStack slot : warehouse)
+            {
+                if (rest.isEmpty()) break;
+                if (!ItemStack.isSameItemSameComponents(slot, rest)) continue;
+                int movable = Math.min(rest.getCount(), slot.getMaxStackSize() - slot.getCount());
+                if (movable <= 0) continue;
+                slot.setCount(slot.getCount() + movable);
+                rest.setCount(rest.getCount() - movable);
+            }
+            if (!rest.isEmpty())
+            {
+                warehouse.add(rest);
+            }
+        }
+    }
+
+    // 仓库中满足条件的物品总数
+    public int countWarehouse(Predicate<ItemStack> filter)
+    {
+        int total = 0;
+        for (ItemStack stack : warehouse)
+        {
+            if (filter.test(stack)) total += stack.getCount();
+        }
+        return total;
+    }
+
+    // 取出最多 maxCount 个满足条件的物品（跨堆收集），返回实际取走的堆；取空的槽位自动移除
+    public List<ItemStack> takeFromWarehouse(Predicate<ItemStack> filter, int maxCount)
+    {
+        List<ItemStack> taken = new ArrayList<>();
+        if (maxCount <= 0) return taken;
+        int remain = maxCount;
+        Iterator<ItemStack> it = warehouse.iterator();
+        while (it.hasNext() && remain > 0)
+        {
+            ItemStack slot = it.next();
+            if (!filter.test(slot)) continue;
+            int take = Math.min(remain, slot.getCount());
+            ItemStack part = slot.copy();
+            part.setCount(take);
+            taken.add(part);
+            remain -= take;
+            if (take >= slot.getCount())
+            {
+                it.remove();
+            }
+            else
+            {
+                slot.setCount(slot.getCount() - take);
+            }
+        }
+        return taken;
+    }
+
+    // ===================== 困难任务表（A1 拍板：全中心通用） =====================
+
+    public List<BlockPos> getDifficultyTable()
+    {
+        return difficultyTable;
+    }
+
+    // 入表（幂等，坐标取不可变快照）
+    public void addDifficulty(BlockPos pos)
+    {
+        BlockPos immutable = pos.immutable();
+        if (!difficultyTable.contains(immutable))
+        {
+            difficultyTable.add(immutable);
+        }
+    }
+
+    // 出表
+    public boolean removeDifficulty(BlockPos pos)
+    {
+        return difficultyTable.remove(pos);
+    }
+
     // ===================== 工程推进 =====================
 
     // 参与者判定三分支：
@@ -579,6 +786,12 @@ public class ProjectCenterInstance
     }
 
     // ===================== 数据访问 =====================
+
+    // 多态分派标签：普通中心；子类覆写（MineInstance → "mine"）
+    public String kind()
+    {
+        return KIND_CENTER;
+    }
 
     public UUID getId() { return id; }
     public UUID getOwner() { return owner; }
