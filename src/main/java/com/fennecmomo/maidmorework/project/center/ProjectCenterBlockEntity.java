@@ -11,6 +11,7 @@ import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
@@ -42,7 +43,13 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
 
     public ProjectCenterBlockEntity(BlockPos pos, BlockState state)
     {
-        super(ProjectCenterRegistration.PROJECT_CENTER_BLOCK_ENTITY.get(), pos, state);
+        this(ProjectCenterRegistration.PROJECT_CENTER_BLOCK_ENTITY.get(), pos, state);
+    }
+
+    // 子类 BE 复用本类身份/生命周期逻辑时传入自己的 BE 类型
+    protected ProjectCenterBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state)
+    {
+        super(type, pos, state);
     }
 
     // ===================== 身份数据 =====================
@@ -168,11 +175,17 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
         if (!level.isClientSide())
         {
             // 服务端：确保全局管理器有对应实例（SavedData 意外丢失时按身份重建）
-            ProjectCenterManager.ensureFromIdentity((ServerLevel) level, this);
+            ensureManagerInstance((ServerLevel) level);
         }
         // 双端注册渲染视图：客户端渲染边界框读方块实体实时数据；
         // 服务端注册供集成服务器（客户端与服务端同 JVM）直接读取，保证边界渲染始终有数据
         RegionalManagerRegistry.register(this);
+    }
+
+    // SavedData 意外丢失时按身份重建实例（子类覆写以重建对应子类实例）
+    protected void ensureManagerInstance(ServerLevel level)
+    {
+        ProjectCenterManager.ensureFromIdentity(level, this);
     }
 
     @Override

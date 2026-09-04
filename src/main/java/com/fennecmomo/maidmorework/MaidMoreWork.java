@@ -12,6 +12,8 @@ import com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterInfoPayload;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterRegistration;
+import com.fennecmomo.maidmorework.project.mine.MineCenterCommand;
+import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
@@ -61,6 +63,8 @@ public class MaidMoreWork
                     output.accept(MineRegistration.FLUID_BOTTLE.get());
                     output.accept(ProjectCenterRegistration.PROJECT_CENTER_BLOCK.get());
                     output.accept(ProjectCenterRegistration.PROJECT_CENTER_MARKER.get());
+                    output.accept(MineCenterRegistration.MINE_CENTER_BLOCK.get());
+                    output.accept(MineCenterRegistration.MINE_CENTER_MARKER.get());
                 })
                 .build());
     }
@@ -79,6 +83,9 @@ public class MaidMoreWork
         ProjectCenterRegistration.BLOCKS.register(modBus);
         ProjectCenterRegistration.BLOCK_ENTITIES.register(modBus);
         ProjectCenterRegistration.ITEMS.register(modBus);
+        MineCenterRegistration.BLOCKS.register(modBus);
+        MineCenterRegistration.BLOCK_ENTITIES.register(modBus);
+        MineCenterRegistration.ITEMS.register(modBus);
         CREATIVE_TABS.register(modBus);
 
         ProjectTypeRegistry.discover();
@@ -139,6 +146,7 @@ public class MaidMoreWork
 
         NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(ProjectCenterCommand::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener(MineCenterCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));
         // 全局工程中心调度：由服务端心跳驱动，与区块加载无关
         NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> {

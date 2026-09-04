@@ -1,6 +1,8 @@
 {
   "block.maidmorework.mine_block": "Mine Block",
   "item.maidmorework.mine_marker": "Mine Marker Tool",
+  "block.maidmorework.mine_center": "Mine Center",
+  "item.maidmorework.mine_center_marker": "Mine Center Marker Tool",
   "item.maidmorework.fluid_bottle": "Fluid Bottle",
   "item.maidmorework.fluid_bottle.empty": "Empty Bottle",
   "task.maidmorework.mining": "Mining",

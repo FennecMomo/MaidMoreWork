@@ -222,6 +222,23 @@ public final class ProjectCenterManager
         e.byId().put(id, inst);
     }
 
+    // 矿井方块实体加载时确保矿井实例存在（ensureFromIdentity 的矿井版）
+    // 竖井两角点随 BE 身份持久化，重建时一并恢复
+    public static void ensureMineFromIdentity(ServerLevel level, ProjectCenterBlockEntity be,
+                                              BlockPos shaftCornerNW, BlockPos shaftCornerSE)
+    {
+        UUID id = be.getId();
+        if (id == null) return;
+        Entry e = entry(level);
+        if (e.byId().containsKey(id)) return;
+
+        MineInstance inst = new MineInstance(id, be.getOwner(), be.getBlockPos(),
+                be.getRadius(), be.getAnchor(), shaftCornerNW, shaftCornerSE);
+        inst.setProjectTypeId(be.getProjectTypeId());
+        inst.setBoundaryVisible(be.isBoundaryVisible());
+        e.byId().put(id, inst);
+    }
+
     public static ProjectCenterInstance get(ServerLevel level, UUID id)
     {
         if (id == null) return null;
