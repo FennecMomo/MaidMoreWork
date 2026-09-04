@@ -113,43 +113,71 @@ public class MineCenterMarkerEventHandler
 
     // ===================== 创建确认 =====================
 
-    // 由角点推导奇数边长（MINE_REDESIGN §2：奇数、≥7 下限；与旧 SpiralMinePlanner 同一约束）
-    // 距离取偶数化：|a-b| 为奇数时减一，使边长 = 偶数距离 + 1 = 奇数
-    private static int oddDistance(int a, int b)
+    // 竖井范围推导结果（强制正方形：长宽一致）
+    private record ShaftPlan(int minX, int maxX, int minZ, int maxZ, int side) {}
+
+    // 距离奇数化：奇数距离 +1，偶数距离取原值（边长 = 偶数距离 + 1 = 奇数）
+    private static int oddSide(int distance)
     {
-        int d = Math.abs(a - b);
-        return (d % 2 == 0) ? d : d - 1;
+        return (distance % 2 == 0) ? distance + 1 : distance;
+    }
+
+    // 由两角点推导正方形竖井范围：
+    //   - 边长 = 两方向距离取较大值后奇数化（2026-09-04 拍板：竖井强制长宽一致）
+    //   - 以两角点中点居中（floorDiv 防负坐标偏差）
+    //   - 边长不足 7 返回 null，由调用方提示拒绝
+    private static ShaftPlan computeShaft(BlockPos c1, BlockPos c2)
+    {
+        int raw = Math.max(Math.abs(c1.getX() - c2.getX()), Math.abs(c1.getZ() - c2.getZ()));
+        int side = oddSide(raw);
+        if (side < 7)
+        {
+            return null;
+        }
+        int centerX = Math.floorDiv(c1.getX() + c2.getX(), 2);
+        int centerZ = Math.floorDiv(c1.getZ() + c2.getZ(), 2);
+        int half = (side - 1) / 2;
+        return new ShaftPlan(centerX - half, centerX + half, centerZ - half, centerZ + half, side);
+    }
+
+    // 原始框选两方向奇数化后边长是否不一致（不一致则确认窗提示"已按长边取正方形"）
+    private static boolean needsSquareHint(BlockPos c1, BlockPos c2)
+    {
+        return oddSide(Math.abs(c1.getX() - c2.getX())) != oddSide(Math.abs(c1.getZ() - c2.getZ()));
+    }
+
+    private static Component tooSmallMessage(BlockPos c1, BlockPos c2)
+    {
+        return Component.literal(String.format("§c矿井范围过小(%dx%d)，最小需要7x7",
+                oddSide(Math.abs(c1.getX() - c2.getX())),
+                oddSide(Math.abs(c1.getZ() - c2.getZ()))));
     }
 
     private static void openConfirmScreen(ServerPlayer player, ItemStack marker,
                                           BlockPos c1, BlockPos c2)
     {
-        int minX = Math.min(c1.getX(), c2.getX());
-        int maxX = minX + oddDistance(c1.getX(), c2.getX());
-        int minZ = Math.min(c1.getZ(), c2.getZ());
-        int maxZ = minZ + oddDistance(c1.getZ(), c2.getZ());
-        int length = maxX - minX + 1;
-        int width = maxZ - minZ + 1;
-
-        if (length < 7 || width < 7)
+        ShaftPlan plan = computeShaft(c1, c2);
+        if (plan == null)
         {
-            player.sendSystemMessage(Component.literal(
-                    String.format("§c矿井范围过小(%dx%d)，最小需要7x7", length, width)));
+            player.sendSystemMessage(tooSmallMessage(c1, c2));
             return;
         }
+
+        String info = String.format("竖井范围 %dx%d", plan.side(), plan.side())
+                + (needsSquareHint(c1, c2) ? "（已按长边取正方形）" : "");
 
         player.openMenu(
                 new SimpleMenuProvider(
                         (containerId, inv, p)
                         -> new ConfirmPopupMenu(containerId, inv,
-                                "确认创建矿井？", String.format("竖井范围 %dx%d", length, width),
+                                "确认创建矿井？", info,
                                 "确认", confirmCommand(c1, c2),
                                 "取消", "maidmorework minecenter cancel"),
                         Component.literal("确认创建矿井")),
                 buf ->
                 {
                     buf.writeUtf("确认创建矿井？");
-                    buf.writeUtf(String.format("竖井范围 %dx%d", length, width));
+                    buf.writeUtf(info);
                     buf.writeUtf("确认");
                     buf.writeUtf(confirmCommand(c1, c2));
                     buf.writeUtf("取消");
@@ -176,23 +204,18 @@ public class MineCenterMarkerEventHandler
             return false;
         }
 
-        int minX = Math.min(c1.getX(), c2.getX());
-        int maxX = minX + oddDistance(c1.getX(), c2.getX());
-        int minZ = Math.min(c1.getZ(), c2.getZ());
-        int maxZ = minZ + oddDistance(c1.getZ(), c2.getZ());
-        int length = maxX - minX + 1;
-        int width = maxZ - minZ + 1;
-
-        if (length < 7 || width < 7)
+        ShaftPlan plan = computeShaft(c1, c2);
+        if (plan == null)
         {
-            player.sendSystemMessage(Component.literal(
-                    String.format("§c矿井范围过小(%dx%d)，最小需要7x7", length, width)));
+            player.sendSystemMessage(tooSmallMessage(c1, c2));
             return false;
         }
 
         // 竖井平面 Y 取玩家当前脚上一格（螺旋自该层向下，同旧版语义）
-        BlockPos center = new BlockPos((minX + maxX) / 2,
-                player.blockPosition().above().getY(), (minZ + maxZ) / 2);
+        // 水平中心 = 两角点中点（与 computeShaft 的居中规则一致）
+        BlockPos center = new BlockPos(Math.floorDiv(c1.getX() + c2.getX(), 2),
+                player.blockPosition().above().getY(),
+                Math.floorDiv(c1.getZ() + c2.getZ(), 2));
 
         BlockState centerState = level.getBlockState(center);
         if (!centerState.isAir() && !centerState.canBeReplaced())
@@ -203,12 +226,12 @@ public class MineCenterMarkerEventHandler
 
         // 干活边界半径 = 竖井半边 + 鱼骨预留（§2：实际边长 = 矿井边长 + 两边鱼骨矿道最长距离，
         // 鱼骨未实现前先给 4 格余量，可在确认后通过边界编辑调整）
-        int radius = (Math.max(length, width) - 1) / 2 + 4;
+        int radius = (plan.side() - 1) / 2 + 4;
 
         java.util.UUID id = java.util.UUID.randomUUID();
         java.util.UUID owner = player.getUUID();
-        BlockPos shaftNW = new BlockPos(minX, center.getY(), minZ);
-        BlockPos shaftSE = new BlockPos(maxX, center.getY(), maxZ);
+        BlockPos shaftNW = new BlockPos(plan.minX(), center.getY(), plan.minZ());
+        BlockPos shaftSE = new BlockPos(plan.maxX(), center.getY(), plan.maxZ());
 
         level.setBlockAndUpdate(center, MineCenterRegistration.MINE_CENTER_BLOCK.get().defaultBlockState());
         if (level.getBlockEntity(center) instanceof MineCenterBlockEntity be)
@@ -221,7 +244,7 @@ public class MineCenterMarkerEventHandler
 
         player.sendSystemMessage(Component.literal(
                 "§a矿井已创建！中心: " + center.toShortString()
-                + "§a, 竖井: §f" + length + "x" + width
+                + "§a, 竖井: §f" + plan.side() + "x" + plan.side()
                 + "§a, 边界半径: §f" + radius));
         level.playSound(null, center, SoundEvents.EXPERIENCE_ORB_PICKUP,
                 SoundSource.PLAYERS, 0.8f, 1.2f);
