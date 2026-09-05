@@ -211,10 +211,10 @@ public class MineCenterMarkerEventHandler
             return false;
         }
 
-        // 竖井平面 Y 取玩家当前脚上一格（螺旋自该层向下，同旧版语义）
-        // 水平中心 = 两角点中点（与 computeShaft 的居中规则一致）
+        // 竖井平面 Y 取玩家脚下所在方块（2026-09-04 修正：原为脚上一格导致矿井方块悬空一格）
+        // 螺旋自该层向下，同旧版语义
         BlockPos center = new BlockPos(Math.floorDiv(c1.getX() + c2.getX(), 2),
-                player.blockPosition().above().getY(),
+                player.blockPosition().getY(),
                 Math.floorDiv(c1.getZ() + c2.getZ(), 2));
 
         BlockState centerState = level.getBlockState(center);
