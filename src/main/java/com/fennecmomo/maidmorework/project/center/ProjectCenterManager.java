@@ -245,6 +245,12 @@ public final class ProjectCenterManager
         return entry(level).byId().get(id);
     }
 
+    // 当前维度全部中心（调试/命令按前缀查找用）
+    public static java.util.Collection<ProjectCenterInstance> allCenters(ServerLevel level)
+    {
+        return entry(level).byId().values();
+    }
+
     // 女仆所属中心（memory → attachment 依次解析）
     public static ProjectCenterInstance getCenterOf(EntityMaid maid)
     {

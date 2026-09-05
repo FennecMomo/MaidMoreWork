@@ -1,4 +1,4 @@
-package com.fennecmomo.maidmorework.mining;
+package com.fennecmomo.maidmorework.project.mine;
 
 import net.minecraft.core.BlockPos;
 

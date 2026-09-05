@@ -3,6 +3,7 @@ package com.fennecmomo.maidmorework.project.mine;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
@@ -50,7 +51,13 @@ public class MineCenterCommand
                                     ServerPlayer player = ctx.getSource().getPlayer();
                                     if (player == null) return 0;
                                     return cancel(player);
-                                }))));
+                                }))
+                        .then(Commands.literal("debug")
+                                .then(Commands.argument("id", com.mojang.brigadier.arguments.StringArgumentType.word())
+                                        .executes(ctx -> {
+                                            String idStr = com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "id");
+                                            return debug(ctx.getSource(), idStr);
+                                        })))));
     }
 
     private static int cancel(ServerPlayer player)
@@ -62,6 +69,32 @@ public class MineCenterCommand
         }
         MineCenterMarkerItem.clearCorners(player.getMainHandItem());
         player.sendSystemMessage(Component.literal("§e已取消矿井创建，角点已清空"));
+        return 1;
+    }
+
+    // 调试：打印矿井当前周期/层状态（螺旋分层数据验证）
+    // id 支持完整 UUID 或前缀（右键矿井方块显示的 8 位短 ID 即可）
+    private static int debug(CommandSourceStack source, String idStr)
+    {
+        if (!(source.getLevel() instanceof net.minecraft.server.level.ServerLevel level)) return 0;
+        com.fennecmomo.maidmorework.project.center.MineInstance mine = null;
+        for (var center : ProjectCenterManager.allCenters(level))
+        {
+            if (!(center instanceof com.fennecmomo.maidmorework.project.center.MineInstance m)) continue;
+            String full = m.getId().toString();
+            if (full.equals(idStr) || full.startsWith(idStr))
+            {
+                mine = m;
+                break;
+            }
+        }
+        if (mine == null)
+        {
+            source.sendFailure(Component.literal("§c未找到矿井实例（可用右键矿井方块显示的 8 位短 ID）"));
+            return 0;
+        }
+        final com.fennecmomo.maidmorework.project.center.MineInstance target = mine;
+        source.sendSuccess(() -> Component.literal("§b[矿井调试] §f" + target.debugLayerInfo(level)), false);
         return 1;
     }
 }

@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework.mining;
 
+import com.fennecmomo.maidmorework.project.mine.SpiralMinePlanner;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
