@@ -165,12 +165,12 @@ public class MineInstance extends ProjectCenterInstance
         return layerIndex;
     }
 
-    // 螺旋规划器 Y 起点 = 矿井方块所在层（玩家脚下，2026-09-04 修正后语义）
+    // 螺旋规划器 Y 起点 = 矿井方块下一层（2026-09-04 拍板修正：第一层=方块下面一层）
     private SpiralMinePlanner planner()
     {
         if (planner == null)
         {
-            planner = new SpiralMinePlanner(getBlockPos().getX(), getBlockPos().getY(),
+            planner = new SpiralMinePlanner(getBlockPos().getX(), getBlockPos().getY() - 1,
                     getBlockPos().getZ(), getShaftLength(), getShaftWidth());
         }
         return planner;
@@ -248,17 +248,54 @@ public class MineInstance extends ProjectCenterInstance
             }
         }
 
-        // 光源：每个 Y 层沿 X 每 6 格一个（入口层不放，§10 层末尾 SETLIGHT 阶段派发）
-        for (int y : keepsByY.keySet())
+        // 光源（2026-09-04 拍板）：只在每条边中段的 3×2 平台处放，每平台 2 盏（每周期 8 盏）
+        // 灯1 = 平台中柱走廊侧外一格，贴平台侧面（平台=保留区，支撑永久）
+        // 灯2 = 平台端柱上方三格(y+3)，贴边界围墙内面（围墙=保留区，支撑永久；高于墙区的层跳过）
+        // 旧方案（每层过道行放灯）作废：灯踩着的支撑方块属于下层挖掘区，下层一挖灯就掉
+        int cx = getBlockPos().getX();
+        int cz = getBlockPos().getZ();
+        for (int edge = 0; edge <= 3; edge++)
         {
-            if (y >= mineY) continue;
-            Set<BlockPos> lights = new HashSet<>();
-            for (int x = p.getMinX() + 3; x <= p.getMaxX() - 3; x += 6)
+            int half = (edge % 2 == 0) ? (p.getL() - 1) / 2 : (p.getW() - 1) / 2;
+            List<BlockPos> platformKeeps = p.getKeepBlocks(cycle, edge, half);
+            if (platformKeeps.isEmpty()) continue;
+            int h = platformKeeps.get(0).getY();
+            Set<BlockPos> lights = cycleLights.computeIfAbsent(h, key -> new HashSet<>());
+            switch (edge)
             {
-                lights.add(new BlockPos(x, y, p.getMinZ() + 1));
-                lights.add(new BlockPos(x, y, p.getMaxZ() - 1));
+                case 0 -> // 北边：平台行 z=minZ..minZ+1，墙在 minZ-1
+                {
+                    lights.add(new BlockPos(cx, h, p.getMinZ() + 2));
+                    if (h + 3 < mineY)
+                    {
+                        lights.add(new BlockPos(cx - 1, h + 3, p.getMinZ()));
+                    }
+                }
+                case 2 -> // 南边：平台行 z=maxZ-1..maxZ，墙在 maxZ+1
+                {
+                    lights.add(new BlockPos(cx, h, p.getMaxZ() - 2));
+                    if (h + 3 < mineY)
+                    {
+                        lights.add(new BlockPos(cx - 1, h + 3, p.getMaxZ()));
+                    }
+                }
+                case 1 -> // 西侧（planner case1：列 x=minX..minX+1），墙在 minX-1，沿 z 行进
+                {
+                    lights.add(new BlockPos(p.getMinX() + 2, h, cz));
+                    if (h + 3 < mineY)
+                    {
+                        lights.add(new BlockPos(p.getMinX(), h + 3, cz - 1));
+                    }
+                }
+                case 3 -> // 东侧（planner case3：列 x=maxX-1..maxX），墙在 maxX+1
+                {
+                    lights.add(new BlockPos(p.getMaxX() - 2, h, cz));
+                    if (h + 3 < mineY)
+                    {
+                        lights.add(new BlockPos(p.getMaxX(), h + 3, cz - 1));
+                    }
+                }
             }
-            cycleLights.put(y, lights);
         }
 
         cycleKeeps.putAll(keepsByY);
@@ -340,6 +377,13 @@ public class MineInstance extends ProjectCenterInstance
                 if (layerProcessed.contains(pos) || lights.contains(pos) || isClaimed(pos)) continue;
 
                 BlockState state = level.getBlockState(pos);
+                // 灯位保护（2026-09-04 拍板）：发光且非流体的方块一格永不进挖掘池
+                // （防任意层级的误挖，含支撑方块被挖导致灯掉落的场景）
+                if (state.getLightEmission() > 0 && state.getFluidState().isEmpty())
+                {
+                    layerProcessed.add(pos);
+                    continue;
+                }
                 MineTask.Type type;
                 if (keeps.contains(pos))
                 {
@@ -519,11 +563,13 @@ public class MineInstance extends ProjectCenterInstance
         return state.getDestroySpeed(level, pos) >= 0;
     }
 
-    // 垫脚方块判定（§5）：泥土/木板/圆石/石头可作保留位垫脚
+    // 垫脚方块判定（§5）：草方块 + 泥土/木板/圆石/石头（2026-09-04 拍板：草方块显式计入，
+    // 保留位遇到草方块直接跳过，不再走"挖掉再垫"的 REPLACE 流程）
     private static boolean isScaffoldState(BlockState state)
     {
         var block = state.getBlock();
-        return block.builtInRegistryHolder().is(BlockTags.DIRT)
+        return block == net.minecraft.world.level.block.Blocks.GRASS_BLOCK
+                || block.builtInRegistryHolder().is(BlockTags.DIRT)
                 || block.builtInRegistryHolder().is(BlockTags.PLANKS)
                 || block.builtInRegistryHolder().is(Tags.Blocks.COBBLESTONES)
                 || block.builtInRegistryHolder().is(Tags.Blocks.STONES);

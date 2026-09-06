@@ -12,17 +12,20 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
@@ -52,11 +55,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
     private static final int MAX_NAV_FAIL = 3;          // 导航失败次数上限，超过后强制到达
     private static final int FETCH_GROUP = 10;          // B2/B3：取消耗品一次一组（10个）
-    private static final int DEPOSIT_FREE_SLOTS = 3;    // B3：剩余可用格阈值（默认3，可配置项后续接入）
     private static final int WAIT_TICKS = 40;           // 阻塞等待节流（B2 仓库无货）
     private static final int BUBBLE_COOLDOWN = 120;     // 气泡冷却（tick）
     private static final long SCAFFOLD_KEY = 9540L;     // 垫脚气泡冷却 key
     private static final long LIGHT_KEY = 9541L;        // 光源气泡冷却 key
+    private static final long PICKAXE_KEY = 9542L;      // 镐子气泡冷却 key
 
     private UUID mineId = null;             // 所属矿井实例 ID
     private MineTask currentTask = null;    // 当前任务
@@ -65,6 +68,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private int mineTimer = 0;
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井挖尽/失联 → 结束行为
+    private boolean pendingDeposit = false; // B3：背包满（产物入包后检测）→ 待去仓库存放
     private ScaffoldFetch scaffoldFetch = ScaffoldFetch.NONE; // FILL/REPLACE 缺垫脚时的取货支线
     private final Map<Long, Long> bubbleLastTick = new HashMap<>();
 
@@ -135,8 +139,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // B3：背包剩余格不足 → 去矿井方块存矿（黑名单外全存）
-        if (freeSlots(maid) < DEPOSIT_FREE_SLOTS)
+        // B3：背包满（产物入包后检测）→ 去仓库存放
+        if (pendingDeposit)
         {
             handleDeposit(level, maid, mine);
             return;
@@ -191,6 +195,17 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             // === DESTROY：挥镐挖掘，掉落物直接进背包 ===
             case DESTROY ->
             {
+                // 挥镐前校验主手（2026-09-04 拍板：徒手不挖），装不上镐则提示+释放
+                if (!maid.getMainHandItem().is(ItemTags.PICKAXES))
+                {
+                    equipPickaxe(maid);
+                    if (!maid.getMainHandItem().is(ItemTags.PICKAXES))
+                    {
+                        showBubbleWithCooldown(maid, "需要镐子", PICKAXE_KEY);
+                        releaseCurrent(mine, maid);
+                        return;
+                    }
+                }
                 if (state.isAir())
                 {
                     finishTask(mine, maid, task);
@@ -356,25 +371,43 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     }
 
     // 完成任务：解绑 + 记已处理，重置单任务状态
+    // B3 拍板流程：干完这格活 → 产物已入包 → 检查无空格 → 待去仓库存放（不夹任何中间步骤）
     private void finishTask(MineInstance mine, EntityMaid maid, MineTask task)
     {
         mine.completeWork(maid, task);
         currentTask = null;
         reachedTarget = false;
         mineTimer = 0;
+        if (freeSlots(maid) == 0)
+        {
+            pendingDeposit = true;
+        }
     }
 
     // ===================== 存取支线 =====================
 
     // B3 存矿：就近矿井方块，黑名单外全部入仓
+    // 寻路连续失败 → 气泡提示 + 放弃本次存货继续干活（多余掉落自然落地），不死等
     private void handleDeposit(ServerLevel level, EntityMaid maid, MineInstance mine)
     {
         if (isNear(maid, mine.getBlockPos()))
         {
             depositToWarehouse(mine, maid);
+            pendingDeposit = false;
             return;
         }
-        navigate(level, maid, mine.getBlockPos());
+        if (!maid.getNavigation().isInProgress())
+        {
+            BlockPos walkTarget = findWalkTarget(level, mine.getBlockPos());
+            boolean moved = walkTarget != null && maid.getNavigation().moveTo(
+                    walkTarget.getX() + 0.5, walkTarget.getY(), walkTarget.getZ() + 0.5, WALK_SPEED);
+            if (!moved && ++navFailCount >= MAX_NAV_FAIL)
+            {
+                showBubbleWithCooldown(maid, "无法返回仓库，继续干活", LIGHT_KEY);
+                pendingDeposit = false;
+                navFailCount = 0;
+            }
+        }
     }
 
     // B3 取垫脚：就近矿井方块，从仓库取一组垫脚方块
@@ -403,10 +436,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         navigate(level, maid, mine.getBlockPos());
     }
 
-    // 存矿（B3 拍板：黑名单外全部入仓）——黑名单：镐/垫脚/光源/流体瓶等自用物资
+    // 存矿（B3 拍板：黑名单外全部入仓）——黑名单：镐/垫脚/光源（流体瓶为填充产物，正常入库）
+    // 统一走合并容器读写（2026-09-04 修正：之前遍历基础背包，产在扩展背包里等于什么都没看见 → 站桩）
     private void depositToWarehouse(MineInstance mine, EntityMaid maid)
     {
-        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
         List<ItemStack> toDeposit = new ArrayList<>();
         List<Integer> slots = new ArrayList<>();
         List<ItemResource> resources = new ArrayList<>();
@@ -583,9 +617,14 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     }
 
     // 放置光源（任意可放置且发光的方块物品，B2 判定）
+    // 走原版 BlockItem.place（带贴面朝向上下文，2026-09-04 修正）：
+    // 火把贴墙/灯笼落地/萤石任意——按六向邻接实体块自动选支撑面
     private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, BlockPos target)
     {
         if (!level.getBlockState(target).isAir()) return false;
+        Direction face = findSupportFace(level, target);
+        if (face == null) return false;
+        BlockPos neighbor = target.relative(face.getOpposite());
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         for (int i = 0; i < inv.size(); i++)
         {
@@ -594,7 +633,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             ItemStack stack = new ItemStack(res.getItem(), 1);
             if (!isLightItem(stack)) continue;
             if (!(stack.getItem() instanceof BlockItem bi)) continue;
-            level.setBlock(target, bi.getBlock().defaultBlockState(), 3);
+
+            BlockHitResult hit = new BlockHitResult(
+                    Vec3.atCenterOf(neighbor), face, neighbor, false);
+            BlockPlaceContext ctx = new BlockPlaceContext(
+                    level, null, InteractionHand.MAIN_HAND, stack, hit);
+            if (!bi.place(ctx).consumesAction()) continue;
             try (Transaction tx = Transaction.openRoot())
             {
                 inv.extract(i, res, 1, tx);
@@ -603,6 +647,21 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return true;
         }
         return false;
+    }
+
+    // 找目标格的实体支撑面（六向扫邻接实体块），返回"从支撑块指向目标格"的方向
+    private static Direction findSupportFace(ServerLevel level, BlockPos target)
+    {
+        for (Direction d : Direction.values())
+        {
+            BlockPos neighbor = target.relative(d);
+            BlockState state = level.getBlockState(neighbor);
+            if (!state.isAir() && state.isSolid())
+            {
+                return d.getOpposite();
+            }
+        }
+        return null;
     }
 
     // 把物品插入女仆背包，返回塞不下的部分（优先同类合并，再空格）
@@ -645,12 +704,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
 
     // ===================== 物品判定 =====================
 
-    // 垫脚物品：泥土/木板/圆石/石头（§5 垫脚集合）
+    // 垫脚物品（§5 垫脚集合；2026-09-04 拍板：草方块显式计入）
     private static boolean isScaffoldItem(ItemStack stack)
     {
         if (!(stack.getItem() instanceof BlockItem bi)) return false;
         var block = bi.getBlock();
-        return block.builtInRegistryHolder().is(BlockTags.DIRT)
+        return block == Blocks.GRASS_BLOCK
+                || block.builtInRegistryHolder().is(BlockTags.DIRT)
                 || block.builtInRegistryHolder().is(BlockTags.PLANKS)
                 || block.builtInRegistryHolder().is(Tags.Blocks.COBBLESTONES)
                 || block.builtInRegistryHolder().is(Tags.Blocks.STONES);
@@ -667,7 +727,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private static boolean isScaffoldState(BlockState state)
     {
         var block = state.getBlock();
-        return block.builtInRegistryHolder().is(BlockTags.DIRT)
+        return block == Blocks.GRASS_BLOCK
+                || block.builtInRegistryHolder().is(BlockTags.DIRT)
                 || block.builtInRegistryHolder().is(BlockTags.PLANKS)
                 || block.builtInRegistryHolder().is(Tags.Blocks.COBBLESTONES)
                 || block.builtInRegistryHolder().is(Tags.Blocks.STONES);
@@ -685,14 +746,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return null;
     }
 
-    // 存矿黑名单（B3 拍板：自用工具与物资不存）
+    // 存矿黑名单（B3 拍板 2026-09-04 修正）：镐/垫脚/光源不存；流体瓶为填充流体的产物，正常入库
     private static boolean isDepositBlacklisted(ItemStack stack)
     {
         if (stack.isEmpty()) return false;
         if (stack.is(ItemTags.PICKAXES)) return true;
         if (isScaffoldItem(stack)) return true;
         if (isLightItem(stack)) return true;
-        if (stack.getItem() instanceof FluidBottleItem) return true;
         return false;
     }
 
@@ -709,30 +769,42 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return empty;
     }
 
-    // 装备镐子：背包有镐则换到主手（同槽位交换，Transaction 原子操作）
+    // 装备镐子（§8 拍板：装备最好的镐）：对比对石头的挖掘速度选最快镐换到主手
+    // 用 Transaction 保证背包操作的原子性（取出镐子+放入旧物品）
     private void equipPickaxe(EntityMaid maid)
     {
-        if (maid.getMainHandItem().is(ItemTags.PICKAXES)) return;
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        ItemStack current = maid.getMainHandItem();
+        float bestSpeed = current.is(ItemTags.PICKAXES) ? current.getDestroySpeed(stone) : 0f;
+        int bestSlot = -1;
+        ItemResource bestRes = null;
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         for (int i = 0; i < inv.size(); i++)
         {
             ItemResource res = inv.getResource(i);
-            if (res.getItem().builtInRegistryHolder().is(ItemTags.PICKAXES))
+            if (res.isEmpty()) continue;
+            ItemStack probe = new ItemStack(res.getItem(), 1);
+            if (!probe.is(ItemTags.PICKAXES)) continue;
+            float speed = probe.getDestroySpeed(stone);
+            if (speed > bestSpeed)
             {
-                ItemStack oldHand = maid.getMainHandItem();
-                try (Transaction tx = Transaction.openRoot())
-                {
-                    inv.extract(i, res, 1, tx);
-                    if (!oldHand.isEmpty())
-                    {
-                        inv.insert(i, ItemResource.of(oldHand), oldHand.getCount(), tx);
-                    }
-                    tx.commit();
-                }
-                maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(res.getItem(), 1));
-                return;
+                bestSpeed = speed;
+                bestSlot = i;
+                bestRes = res;
             }
         }
+        if (bestSlot < 0 || bestRes == null) return;
+        ItemStack oldHand = maid.getMainHandItem();
+        try (Transaction tx = Transaction.openRoot())
+        {
+            inv.extract(bestSlot, bestRes, 1, tx);
+            if (!oldHand.isEmpty())
+            {
+                inv.insert(bestSlot, ItemResource.of(oldHand), oldHand.getCount(), tx);
+            }
+            tx.commit();
+        }
+        maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(bestRes.getItem(), 1));
     }
 
     private void showBubbleWithCooldown(EntityMaid maid, String text, long key)
@@ -823,6 +895,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         mineTimer = 0;
         waitTicks = 0;
         finished = false;
+        pendingDeposit = false;
         scaffoldFetch = ScaffoldFetch.NONE;
     }
 }

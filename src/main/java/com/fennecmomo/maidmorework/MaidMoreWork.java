@@ -17,6 +17,7 @@ import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudPayload;
 import com.fennecmomo.maidmorework.project.hud.ProjectHudQueryPayload;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidAndItemTransformEvent;
+import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTaskEnableEvent;
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -158,6 +159,11 @@ public class MaidMoreWork
         // 女仆被拾取/收起时：释放工程席位 + 完整脱离中心（中断协议）
         NeoForge.EVENT_BUS.addListener((MaidAndItemTransformEvent.ToItem e) -> {
                 ProjectCenterManager.releaseMaid(e.getMaid());
+        });
+        // 女仆任务切换（2026-09-04 拍板）：完整脱离旧中心/工程（释放席位+退中心+恢复Home），
+        // 防占位遗留；砍树/挖矿/空闲通用
+        NeoForge.EVENT_BUS.addListener((MaidTaskEnableEvent e) -> {
+                ProjectCenterManager.releaseMaid(e.getEntityMaid());
         });
         // 服务端停止时清理静态注册表，避免跨世界残留
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> {
