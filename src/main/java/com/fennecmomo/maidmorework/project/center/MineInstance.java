@@ -51,15 +51,24 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos.CODEC.fieldOf("shaftCornerSE").forGetter(MineInstance::getShaftCornerSE),
             Codec.BOOL.optionalFieldOf("exhausted", false).forGetter(MineInstance::isExhausted),
             Codec.INT.optionalFieldOf("cycle", 0).forGetter(MineInstance::getCycle),
-            Codec.INT.optionalFieldOf("layerIndex", 0).forGetter(MineInstance::getLayerIndex)
+            Codec.INT.optionalFieldOf("layerIndex", 0).forGetter(MineInstance::getLayerIndex),
+            MineTask.CODEC.listOf().optionalFieldOf("mineHardTasks", List.of())
+                    .forGetter(c -> new ArrayList<>(c.mineHardTasks)),
+            BlockPos.CODEC.listOf().optionalFieldOf("sealedAir", List.of())
+                    .forGetter(c -> new ArrayList<>(c.sealedAir)),
+            BlockPos.CODEC.listOf().optionalFieldOf("sealedSolid", List.of())
+                    .forGetter(c -> new ArrayList<>(c.sealedSolid))
         ).apply(inst, MineInstance::fromCodec));
 
     // Codec 工厂方法：基类字段整体解码后包装成矿井实例
     private static MineInstance fromCodec(ProjectCenterInstance base,
                                           BlockPos shaftCornerNW, BlockPos shaftCornerSE,
-                                          boolean exhausted, int cycle, int layerIndex)
+                                          boolean exhausted, int cycle, int layerIndex,
+                                          List<MineTask> mineHardTasks,
+                                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid)
     {
-        return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex);
+        return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex,
+                mineHardTasks, sealedAir, sealedSolid);
     }
 
     // 扁平组合的 forGetter 引：把矿井实例视作基类交给基类 Codec 编解码
@@ -94,6 +103,32 @@ public class MineInstance extends ProjectCenterInstance
     private final Map<UUID, MineTask> layerSubtasks = new HashMap<>();
     private final List<BlockPos> layerHardList = new ArrayList<>();
 
+    // ===================== 困难表 / 封存列表（D1 终版） =====================
+
+    // 矿井自有"带类型"困难表（§7 调整：条目=坐标+动作类型，FILL 也能入表，持久化）
+    // 来源：层结算上缴（基岩类）/行为侧七步工具流程判定不可挖掘/10s 记录位置检查违规
+    private final List<MineTask> mineHardTasks = new ArrayList<>();
+
+    // 封存列表（2026-09-04 拍板）：女仆完成一格即按动作分类封存
+    //   空置封存 = 记录为空的位置不能有方块；实体封存 = 记录为实体的位置不能是空的
+    private final List<BlockPos> sealedAir = new ArrayList<>();
+    private final List<BlockPos> sealedSolid = new ArrayList<>();
+
+    // 10s 记录位置检查（分片轮询，游标不持久化）
+    private static final int REFRESH_INTERVAL_TICKS = 200;  // 10 秒
+    private static final int REFRESH_SLICE = 256;           // 每轮每列表检查分片
+    private long lastRefreshGameTime = 0;
+    private int airCursor = 0;
+    private int solidCursor = 0;
+
+    // 层结算复核等待（2 秒，2026-09-04 拍板：层清空后等掉落物落网再推进）
+    private static final long SETTLE_WAIT_TICKS = 40;
+    private long settleWaitUntil = 0;
+
+    // 困难表失败冷却（取表后判定仍不可挖掘的坐标，短期内不再取出）
+    private static final long HARD_FAIL_COOLDOWN_TICKS = 100;
+    private final Map<BlockPos, Long> hardFailCooldown = new HashMap<>();
+
     // ===================== 构造 =====================
 
     // 新建矿井：标记工具两角点框定竖井范围后由 ProjectCenterManager.createMine 调用
@@ -111,7 +146,9 @@ public class MineInstance extends ProjectCenterInstance
     // Codec 反序列化构造：基类字段经拷贝构造接管 + 矿井特有字段
     private MineInstance(ProjectCenterInstance base,
                          BlockPos shaftCornerNW, BlockPos shaftCornerSE,
-                         boolean exhausted, int cycle, int layerIndex)
+                         boolean exhausted, int cycle, int layerIndex,
+                         List<MineTask> mineHardTasks,
+                         List<BlockPos> sealedAir, List<BlockPos> sealedSolid)
     {
         super(base);
         this.shaftCornerNW = shaftCornerNW;
@@ -119,6 +156,9 @@ public class MineInstance extends ProjectCenterInstance
         this.exhausted = exhausted;
         this.cycle = cycle;
         this.layerIndex = layerIndex;
+        this.mineHardTasks.addAll(mineHardTasks);
+        this.sealedAir.addAll(sealedAir);
+        this.sealedSolid.addAll(sealedSolid);
     }
 
     // ===================== 多态标签 =====================
@@ -398,7 +438,7 @@ public class MineInstance extends ProjectCenterInstance
                     }
                     else
                     {
-                        type = canProcess(level, pos, state, maid)             // 非垫脚实体 → 换（§5）
+                        type = canProcess(level, pos, state)                    // 非垫脚实体 → 换（§5）
                                 ? MineTask.Type.REPLACE : null;
                     }
                 }
@@ -409,7 +449,7 @@ public class MineInstance extends ProjectCenterInstance
                         layerProcessed.add(pos);                         // 无方块 → 丢已处理
                         continue;
                     }
-                    type = canProcess(level, pos, state, maid) ? MineTask.Type.DESTROY : null;
+                    type = canProcess(level, pos, state) ? MineTask.Type.DESTROY : null;
                 }
 
                 if (type == null)
@@ -443,18 +483,45 @@ public class MineInstance extends ProjectCenterInstance
             return lightTask;
         }
 
-        // 3. 层完成结算：他人在干 → 让位等待（§3）
+        // 3. 层完成结算：他人在干 → 让位等待（§3）；无人干活 → 等 2 秒复核（D1 终版：
+        //    掉落物落网期间派发扫描实时重判，2 秒后池子仍空才推进下一层）
         if (!layerSubtasks.isEmpty()) return null;
+        long now = level.getGameTime();
+        if (settleWaitUntil == 0)
+        {
+            settleWaitUntil = now + SETTLE_WAIT_TICKS;
+            return null;
+        }
+        if (now < settleWaitUntil) return null;
+        settleWaitUntil = 0;
         advanceLayer(level);
         return null;
     }
 
-    // 女仆完成子任务：解绑 + 坐标记入已处理（取灯指令不记坐标）
+    // 女仆完成子任务：解绑 + 封存坐标 + 清除对应困难表条目 + 重置层复核计时
+    // （2026-09-04 拍板：DESTROY → 空置封存；FILL/REPLACE/SETLIGHT → 实体封存（非空即可，火把也算））
     public void completeWork(EntityMaid maid, MineTask task)
     {
         layerSubtasks.remove(maid.getUUID());
-        if (task.type() == MineTask.Type.FETCH_LIGHT) return;
-        layerProcessed.add(task.pos());
+        settleWaitUntil = 0;
+        switch (task.type())
+        {
+            case DESTROY -> sealPosition(task.pos(), false);
+            case FILL, REPLACE, SETLIGHT -> sealPosition(task.pos(), true);
+            default -> { }   // FETCH_LIGHT 非坐标任务
+        }
+        // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
+        mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
+        hardFailCooldown.remove(task.pos());
+    }
+
+    // 封存坐标：先清两列表中的旧记录（同一格重分类时移动），再按类别入表
+    private void sealPosition(BlockPos pos, boolean solid)
+    {
+        BlockPos immutable = pos.immutable();
+        sealedAir.remove(immutable);
+        sealedSolid.remove(immutable);
+        (solid ? sealedSolid : sealedAir).add(immutable);
     }
 
     // 女仆放弃子任务：仅解绑，坐标回池子（§3 离场协议）
@@ -474,35 +541,64 @@ public class MineInstance extends ProjectCenterInstance
         return false;
     }
 
-    // 矿井困难表取任务（§6 步骤0）：取距女仆最近且当前能处理的坐标，出表派发
-    // 已消失（空气）的坐标直接出表；仍不能处理的留在表内
+    // 矿井带类型困难表取任务（§6 步骤0，2026-09-04 终版）
+    // 快照遍历 + 循环外删除（修复遍历中删除导致的 ConcurrentModificationException 崩服）
+    // 条目保留到完成才移除；判定仍不可挖掘的坐标进失败冷却，短期不再取出
     private MineTask takeHardTableTask(ServerLevel level, EntityMaid maid)
     {
-        if (getDifficultyTable().isEmpty()) return null;
-        BlockPos best = null;
-        MineTask.Type bestType = null;
+        if (mineHardTasks.isEmpty()) return null;
+        MineTask best = null;
         double bestDist = Double.MAX_VALUE;
-        for (BlockPos pos : getDifficultyTable())
+        List<MineTask> satisfied = new ArrayList<>();
+        long now = level.getGameTime();
+        for (MineTask task : new ArrayList<>(mineHardTasks))
         {
+            BlockPos pos = task.pos();
             if (!level.isLoaded(pos)) continue;
+            Long failAt = hardFailCooldown.get(pos);
+            if (failAt != null && now < failAt) continue;
             BlockState state = level.getBlockState(pos);
-            if (state.isAir())
+            boolean solved = switch (task.type())
             {
-                removeDifficulty(pos);
+                case FILL -> !state.isAir();          // 已被补上
+                default -> state.isAir();             // 已被挖掉
+            };
+            if (solved)
+            {
+                satisfied.add(task);
                 continue;
             }
-            if (!canProcess(level, pos, state, maid)) continue;
+            // 基岩类 DESTROY 永远无法派发，留表（不进失败冷却）
+            if (task.type() != MineTask.Type.FILL && state.getDestroySpeed(level, pos) < 0) continue;
             double dist = pos.distSqr(maid.blockPosition());
             if (dist < bestDist)
             {
                 bestDist = dist;
-                best = pos;
-                bestType = MineTask.Type.DESTROY;
+                best = task;
             }
         }
-        if (best == null) return null;
-        removeDifficulty(best);
-        return new MineTask(best.immutable(), bestType);
+        mineHardTasks.removeAll(satisfied);
+        for (MineTask t : satisfied)
+        {
+            hardFailCooldown.remove(t.pos());
+        }
+        return best;
+    }
+
+    // 困难表入表（幂等，按坐标+类型去重）
+    public void addHardTask(MineTask task)
+    {
+        for (MineTask t : mineHardTasks)
+        {
+            if (t.pos().equals(task.pos()) && t.type() == task.type()) return;
+        }
+        mineHardTasks.add(task);
+    }
+
+    // 行为侧判定仍不可挖掘 → 失败冷却（同坐标短期内不再从表里取出）
+    public void failHardTask(ServerLevel level, MineTask task)
+    {
+        hardFailCooldown.put(task.pos(), level.getGameTime() + HARD_FAIL_COOLDOWN_TICKS);
     }
 
     // 光源阶段（§10/§6 步骤2）：层内未放的光源位，有灯 → SETLIGHT，无灯 → FETCH_LIGHT
@@ -556,16 +652,11 @@ public class MineInstance extends ProjectCenterInstance
         return blockItem.getBlock().defaultBlockState().getLightEmission() > 0;
     }
 
-    // 难度判定（§8 纯布尔，2026-09-04 升级为女仆侧）：基岩类（破坏耗时 < 0）永远不能；
-    // 需要正确工具的方块按女仆主手 isCorrectToolForDrops 判定（铁镐挖黑曜石 → 不能）
-    private static boolean canProcess(ServerLevel level, BlockPos pos, BlockState state, EntityMaid maid)
+    // 难度判定（§8，2026-09-04 终版：派发侧降级为基岩类拦截——工具可行性判定移到行为侧七步流程，
+    // 凑不出工具的坐标由行为侧进带类型困难表，补货后可重试）
+    private static boolean canProcess(ServerLevel level, BlockPos pos, BlockState state)
     {
-        if (state.getDestroySpeed(level, pos) < 0) return false;
-        if (state.requiresCorrectToolForDrops())
-        {
-            return maid.getMainHandItem().isCorrectToolForDrops(state);
-        }
-        return true;
+        return state.getDestroySpeed(level, pos) >= 0;
     }
 
     // 垫脚方块判定（§5）：草方块 + 泥土/木板/圆石/石头（2026-09-04 拍板：草方块显式计入，
@@ -582,17 +673,18 @@ public class MineInstance extends ProjectCenterInstance
 
     // ===================== 结算推进 =====================
 
-    // 层结算（§6 步骤3）：层困难表上缴中心（§7），推进下一层；周期耗尽进下一周期；
-    // 新层低于深度限制时在下次 requestWork 头部判为已挖尽（D2）
+    // 层结算（§6 步骤3）：层困难坐标上缴矿井带类型困难表（§7 调整），推进下一层；
+    // 周期耗尽进下一周期；新层低于深度限制时在下次 requestWork 头部判为已挖尽（D2）
     private void advanceLayer(ServerLevel level)
     {
         for (BlockPos pos : layerHardList)
         {
-            addDifficulty(pos);
+            addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
         }
         layerHardList.clear();
         layerSubtasks.clear();
         layerProcessed.clear();
+        settleWaitUntil = 0;
 
         layerIndex++;
         if (layerIndex >= cycleLayerYs.size())
@@ -604,6 +696,61 @@ public class MineInstance extends ProjectCenterInstance
             cycleLights.clear();
             ensureCycleComputed(level);
         }
+    }
+
+    // ===================== 10 秒记录位置检查（D1 终版） =====================
+
+    // 由 ProjectCenterManager 全局 tick 驱动；基类 tick 对矿井早退（projectTypeId 为空）无副作用
+    @Override
+    public void tick(ServerLevel level)
+    {
+        super.tick(level);
+        long now = level.getGameTime();
+        if (lastRefreshGameTime == 0)
+        {
+            lastRefreshGameTime = now;
+            return;
+        }
+        if (now - lastRefreshGameTime < REFRESH_INTERVAL_TICKS) return;
+        lastRefreshGameTime = now;
+        refreshSealedLists(level);
+    }
+
+    // 检查封存列表：空置位有方块 → 困难表 DESTROY；实体位为空 → 困难表 FILL
+    // 分片轮询（每轮每列表至多 REFRESH_SLICE 格），单 tick 成本恒定，游标跨轮持续推进
+    private void refreshSealedLists(ServerLevel level)
+    {
+        checkSealedSlice(level, true);
+        checkSealedSlice(level, false);
+    }
+
+    // expectEmpty=true 检查空置封存（不能有方块）；false 检查实体封存（不能为空）
+    private void checkSealedSlice(ServerLevel level, boolean expectEmpty)
+    {
+        List<BlockPos> list = expectEmpty ? sealedAir : sealedSolid;
+        if (list.isEmpty())
+        {
+            if (expectEmpty) airCursor = 0;
+            else solidCursor = 0;
+            return;
+        }
+        int cursor = expectEmpty ? airCursor : solidCursor;
+        if (cursor >= list.size()) cursor = 0;
+        int end = Math.min(list.size(), cursor + REFRESH_SLICE);
+        for (int i = cursor; i < end; i++)
+        {
+            BlockPos pos = list.get(i);
+            if (!level.isLoaded(pos)) continue;
+            BlockState state = level.getBlockState(pos);
+            boolean violated = expectEmpty ? !state.isAir() : state.isAir();
+            if (violated)
+            {
+                addHardTask(new MineTask(pos.immutable(),
+                        expectEmpty ? MineTask.Type.DESTROY : MineTask.Type.FILL));
+            }
+        }
+        if (expectEmpty) airCursor = end >= list.size() ? 0 : end;
+        else solidCursor = end >= list.size() ? 0 : end;
     }
 
     // ===================== 挖尽状态（D2） =====================
@@ -636,8 +783,9 @@ public class MineInstance extends ProjectCenterInstance
         int y = cycleLayerYs.get(layerIndex);
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
-        return String.format("周期C%d 层#%d/%d Y=%d(限%d) 保留%d 光源%d 已处理%d 子任务%d 层困难%d",
+        return String.format("周期C%d 层#%d/%d Y=%d(限%d) 保留%d 光源%d 子任务%d 层困难%d | 困难表%d 空置封存%d 实体封存%d",
                 cycle, layerIndex, cycleLayerYs.size(), y, depthBottomY(),
-                keeps.size(), lights.size(), layerProcessed.size(), layerSubtasks.size(), layerHardList.size());
+                keeps.size(), lights.size(), layerSubtasks.size(), layerHardList.size(),
+                mineHardTasks.size(), sealedAir.size(), sealedSolid.size());
     }
 }
