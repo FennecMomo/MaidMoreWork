@@ -1,8 +1,6 @@
 package com.fennecmomo.maidmorework;
 
 import com.fennecmomo.maidmorework.item.FluidBottleItem;
-import com.fennecmomo.maidmorework.mining.MineCommand;
-import com.fennecmomo.maidmorework.mining.MineRegistration;
 import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import com.fennecmomo.maidmorework.project.ProjectClientHelper;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterActivationHud;
@@ -51,17 +49,15 @@ public class MaidMoreWork
             ResourceKey.create(Registries.CREATIVE_MODE_TAB,
                     net.minecraft.resources.Identifier.fromNamespaceAndPath(MODID, "tab"));
 
-    // 静态初始化块：注册创造模式标签页，添加矿井方块/标记工具/流体瓶
+    // 静态初始化块：注册创造模式标签页，添加矿井中心方块/标记工具/流体瓶/工程中心
     static
     {
         CREATIVE_TABS.register("tab", () -> CreativeModeTab.builder()
                 .title(Component.literal("MaidMoreWork"))
-                .icon(() -> new ItemStack(MineRegistration.MINE_MARKER.get()))
+                .icon(() -> new ItemStack(MineCenterRegistration.MINE_CENTER_MARKER.get()))
                 .displayItems((params, output) ->
                 {
-                    output.accept(MineRegistration.MINE_BLOCK.get());
-                    output.accept(MineRegistration.MINE_MARKER.get());
-                    output.accept(MineRegistration.FLUID_BOTTLE.get());
+                    output.accept(MineCenterRegistration.FLUID_BOTTLE.get());
                     output.accept(ProjectCenterRegistration.PROJECT_CENTER_BLOCK.get());
                     output.accept(ProjectCenterRegistration.PROJECT_CENTER_MARKER.get());
                     output.accept(MineCenterRegistration.MINE_CENTER_BLOCK.get());
@@ -76,11 +72,7 @@ public class MaidMoreWork
     {
         ModMemories.MEMORY_MODULE_TYPES.register(modBus);
         ModAttachments.ATTACHMENT_TYPES.register(modBus);
-        MineRegistration.BLOCKS.register(modBus);
-        MineRegistration.BLOCK_ENTITIES.register(modBus);
-        MineRegistration.ITEMS.register(modBus);
         FluidBottleItem.DATA_COMPONENTS.register(modBus);
-        MineRegistration.MENUS.register(modBus);
         ProjectCenterRegistration.BLOCKS.register(modBus);
         ProjectCenterRegistration.BLOCK_ENTITIES.register(modBus);
         ProjectCenterRegistration.ITEMS.register(modBus);
@@ -145,7 +137,6 @@ public class MaidMoreWork
             );
         });
 
-        NeoForge.EVENT_BUS.addListener(MineCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(ProjectCenterCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(MineCenterCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener((MaidTickEvent e) -> MaidBubbleHelper.onMaidTick(e.getMaid()));

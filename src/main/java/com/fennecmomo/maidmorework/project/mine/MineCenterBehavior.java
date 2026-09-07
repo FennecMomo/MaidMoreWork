@@ -361,7 +361,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
             if (fluidKey != null)
             {
-                ItemStack bottle = new ItemStack(com.fennecmomo.maidmorework.mining.MineRegistration.FLUID_BOTTLE.get(), 1);
+                ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
                 FluidBottleItem.setFluid(bottle, fluidKey);
                 ItemStack leftover = addToInventory(maid, bottle);
                 if (!leftover.isEmpty())
@@ -655,7 +655,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
                 if (fluidKey != null)
                 {
-                    ItemStack bottle = new ItemStack(com.fennecmomo.maidmorework.mining.MineRegistration.FLUID_BOTTLE.get(), 1);
+                    ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
                     FluidBottleItem.setFluid(bottle, fluidKey);
                     ItemStack leftover = addToInventory(maid, bottle);
                     if (!leftover.isEmpty())
@@ -694,13 +694,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 放置光源（2026-09-04 崩溃修复：不再走需要 Player 的 BlockPlaceContext，手动放置）
-    //   下方有实体 → 任意光源物品放默认状态（落地火把/灯笼/萤石）
-    //   下方无实体但水平侧面有墙且为火把 → 放贴墙火把（WallTorchBlock.FACING 按支撑面设置）
-    //   都不满足 → false（调用方放弃该灯位）
+    // 放置光源（2026-09-04 拍板：摆放面只检查侧面，不允许上/下两面挂）
+    //   原因：放置时下一层尚未挖掘、地面仍是实体，若允许落地放置，灯会被下层挖掉
+    //   火把贴墙：WallTorchBlock.FACING 按支撑墙设置；非火把光源（灯笼等）无法贴墙 → 放不了 → 调用方放弃该灯位
     private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, BlockPos target)
     {
-        BlockState below = level.getBlockState(target.below());
+        Direction facing = findWallFace(level, target);
+        if (facing == null) return false;
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         for (int i = 0; i < inv.size(); i++)
         {
@@ -709,20 +709,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             ItemStack stack = new ItemStack(res.getItem(), 1);
             if (!isLightItem(stack)) continue;
             if (!(stack.getItem() instanceof BlockItem bi)) continue;
-
-            BlockState placeState;
-            if (below.isSolid())
-            {
-                placeState = bi.getBlock().defaultBlockState();
-            }
-            else
-            {
-                if (!stack.is(Items.TORCH)) continue;
-                Direction facing = findWallFace(level, target);
-                if (facing == null) continue;
-                placeState = Blocks.WALL_TORCH.defaultBlockState()
-                        .setValue(WallTorchBlock.FACING, facing);
-            }
+            if (!stack.is(Items.TORCH)) continue;       // 只有火把能贴墙挂
+            BlockState placeState = Blocks.WALL_TORCH.defaultBlockState()
+                    .setValue(WallTorchBlock.FACING, facing);
             level.setBlock(target, placeState, 3);
             try (Transaction tx = Transaction.openRoot())
             {

@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.project.mine;
 
 import com.fennecmomo.maidmorework.MaidMoreWork;
+import com.fennecmomo.maidmorework.item.FluidBottleItem;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.BlockItem;
@@ -11,9 +12,10 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 // 矿井中心注册表（A1 拍板后的新矿井创建流，替代旧 mining 包，见 MINE_REDESIGN §1）
-// 旧 mining 包的 mine_block/mine_marker 注册仍被遗留代码占用，故新注册使用独立 ID：
+// 旧 mining 包已整体删除，本表为矿井相关注册的唯一入口：
 //   mine_center          — 矿井中心方块（工程中心方块的子类实现）
 //   mine_center_marker   — 矿井标记工具（两角点框选竖井范围）
+//   fluid_bottle         — 液体瓶（§9 源流体处理的产物容器）
 // 资产层复用旧 mine_block 贴图，仅新增 JSON 指向
 public class MineCenterRegistration
 {
@@ -52,4 +54,11 @@ public class MineCenterRegistration
                     id -> new MineCenterMarkerItem(new Item.Properties()
                             .setId(ResourceKey.create(Registries.ITEM, id))
                             .stacksTo(1)));
+
+    // 液体瓶（最多堆叠 16，§9 源流体处理产物）
+    public static final DeferredHolder<Item, FluidBottleItem> FLUID_BOTTLE =
+            ITEMS.register("fluid_bottle",
+                    id -> new FluidBottleItem(new Item.Properties()
+                            .setId(ResourceKey.create(Registries.ITEM, id))
+                            .stacksTo(16)));
 }

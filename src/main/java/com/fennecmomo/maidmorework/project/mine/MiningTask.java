@@ -1,4 +1,4 @@
-package com.fennecmomo.maidmorework.mining;
+package com.fennecmomo.maidmorework.project.mine;
 
 import java.util.ArrayList;
 import java.util.List;
