@@ -17,15 +17,14 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.WallTorchBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
@@ -50,13 +49,14 @@ import java.util.UUID;
 // 装备：开工装备镐（复用旧 equipPickaxe 模式）
 public class MineCenterBehavior extends Behavior<EntityMaid>
 {
-    private static final int MINE_INTERVAL = 10;        // 挖一个方块的 tick 间隔
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
     private static final int MAX_NAV_FAIL = 3;          // 导航失败次数上限，超过后强制到达
     private static final int FETCH_GROUP = 10;          // B2/B3：取消耗品一次一组（10个）
     private static final int WAIT_TICKS = 40;           // 阻塞等待节流（B2 仓库无货）
     private static final int BUBBLE_COOLDOWN = 120;     // 气泡冷却（tick）
+    private static final float DIG_DIVISOR = 30f;       // 真挖掘：可正确掉落的分母（原版公式）
+    private static final float DIG_WRONG_TOOL_DIVISOR = 100f; // 真挖掘：工具不正确的分母
     private static final long SCAFFOLD_KEY = 9540L;     // 垫脚气泡冷却 key
     private static final long LIGHT_KEY = 9541L;        // 光源气泡冷却 key
     private static final long PICKAXE_KEY = 9542L;      // 镐子气泡冷却 key
@@ -65,16 +65,25 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private MineTask currentTask = null;    // 当前任务
     private boolean reachedTarget = false;
     private int navFailCount = 0;
-    private int mineTimer = 0;
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井挖尽/失联 → 结束行为
     private boolean pendingDeposit = false; // B3：背包满（产物入包后检测）→ 待去仓库存放
-    private ScaffoldFetch scaffoldFetch = ScaffoldFetch.NONE; // FILL/REPLACE 缺垫脚时的取货支线
+    private float digProgress = 0f;         // 真挖掘进度（2026-09-04 拍板：原版公式逐 tick 累计）
+    private BlockPos digPos = null;         // 正在挖的坐标（换目标即重置进度与裂纹）
+    private FetchKind fetchKind = FetchKind.NONE; // 取货支线（缺垫脚/缺镐）
     private final Map<Long, Long> bubbleLastTick = new HashMap<>();
 
-    private enum ScaffoldFetch
+    private enum FetchKind
     {
-        NONE, FETCH
+        NONE, SCAFFOLD, PICKAXE
+    }
+
+    // 入库扫描项（B3 保留规则用）
+    private record SlotRef(int slot, ItemResource res, int amount, ItemStack probe, Category cat) {}
+
+    private enum Category
+    {
+        SCAFFOLD, LIGHT, OTHER
     }
 
     public MineCenterBehavior()
@@ -117,10 +126,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         currentTask = null;
         reachedTarget = false;
         navFailCount = 0;
-        mineTimer = 0;
         waitTicks = 0;
         finished = false;
-        scaffoldFetch = ScaffoldFetch.NONE;
+        pendingDeposit = false;
+        digProgress = 0f;
+        digPos = null;
+        fetchKind = FetchKind.NONE;
     }
 
     @Override
@@ -146,10 +157,15 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // FILL/REPLACE 缺垫脚 → 取货支线
-        if (scaffoldFetch == ScaffoldFetch.FETCH)
+        // FILL/REPLACE 缺垫脚 / DESTROY 缺镐 → 取货支线
+        if (fetchKind == FetchKind.SCAFFOLD)
         {
             handleScaffoldFetch(level, maid, mine);
+            return;
+        }
+        if (fetchKind == FetchKind.PICKAXE)
+        {
+            handlePickaxeFetch(level, maid, mine);
             return;
         }
 
@@ -160,7 +176,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             if (task == null) return;
             currentTask = task;
             reachedTarget = false;
-            mineTimer = 0;
+            digProgress = 0f;
+            digPos = null;
         }
 
         MineTask task = currentTask;
@@ -192,17 +209,17 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
 
         switch (task.type())
         {
-            // === DESTROY：挥镐挖掘，掉落物直接进背包 ===
+            // === DESTROY：真挖掘（原版公式），完成扣耐久 + 掉落进背包 ===
             case DESTROY ->
             {
-                // 挥镐前校验主手（2026-09-04 拍板：徒手不挖），装不上镐则提示+释放
+                // 挥镐前校验主手（2026-09-04 拍板：徒手不挖）——背包没有则去仓库取
                 if (!maid.getMainHandItem().is(ItemTags.PICKAXES))
                 {
                     equipPickaxe(maid);
                     if (!maid.getMainHandItem().is(ItemTags.PICKAXES))
                     {
-                        showBubbleWithCooldown(maid, "需要镐子", PICKAXE_KEY);
                         releaseCurrent(mine, maid);
+                        fetchKind = FetchKind.PICKAXE;
                         return;
                     }
                 }
@@ -211,11 +228,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     finishTask(mine, maid, task);
                     return;
                 }
-                mineTimer++;
                 maid.swing(maid.getUsedItemHand());
-                if (mineTimer >= MINE_INTERVAL)
+                if (progressDig(level, maid, target, state))
                 {
-                    mineAndCollect(level, maid, target);
                     checkBelowSafety(level, maid, target);
                     finishTask(mine, maid, task);
                 }
@@ -238,7 +253,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     // 缺垫脚 → 释放任务 + 取货支线（B3）
                     showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
                     releaseCurrent(mine, maid);
-                    scaffoldFetch = ScaffoldFetch.FETCH;
+                    fetchKind = FetchKind.SCAFFOLD;
                 }
             }
 
@@ -260,18 +275,14 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     {
                         showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
                         releaseCurrent(mine, maid);
-                        scaffoldFetch = ScaffoldFetch.FETCH;
+                        fetchKind = FetchKind.SCAFFOLD;
                     }
                 }
                 else
                 {
-                    mineTimer++;
+                    // 非垫脚实体块 → 真挖掘，挖完不交任务，下一 tick 走垫脚阶段
                     maid.swing(maid.getUsedItemHand());
-                    if (mineTimer >= MINE_INTERVAL)
-                    {
-                        mineAndCollect(level, maid, target);
-                        mineTimer = 0;                       // 挖完不交任务，下一阶段垫脚
-                    }
+                    progressDig(level, maid, target, state);
                 }
             }
 
@@ -285,23 +296,24 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
                 if (!state.isAir())
                 {
-                    mineTimer++;
+                    // 位上有方块 → 真挖掘，挖完下一 tick 走放置
                     maid.swing(maid.getUsedItemHand());
-                    if (mineTimer >= MINE_INTERVAL)
-                    {
-                        mineAndCollect(level, maid, target);
-                        mineTimer = 0;
-                    }
+                    progressDig(level, maid, target, state);
                     return;
                 }
                 if (tryPlaceLight(level, maid, target))
                 {
                     finishTask(mine, maid, task);
                 }
-                else
+                else if (!hasLightInInv(maid))
                 {
                     // 包里灯用完了 → 释放，requestWork 会重新给出 FETCH_LIGHT（B2）
                     releaseCurrent(mine, maid);
+                }
+                else
+                {
+                    // 有灯但该位置放不了（无支撑面）→ 放弃该灯位，不无限重试
+                    finishTask(mine, maid, task);
                 }
             }
 
@@ -366,7 +378,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
             releaseCurrent(mine, maid);
-            scaffoldFetch = ScaffoldFetch.FETCH;
+            fetchKind = FetchKind.SCAFFOLD;
         }
     }
 
@@ -377,7 +389,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         mine.completeWork(maid, task);
         currentTask = null;
         reachedTarget = false;
-        mineTimer = 0;
         if (freeSlots(maid) == 0)
         {
             pendingDeposit = true;
@@ -392,7 +403,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     {
         if (isNear(maid, mine.getBlockPos()))
         {
-            depositToWarehouse(mine, maid);
+            depositToWarehouse(mine, maid, level);
             pendingDeposit = false;
             return;
         }
@@ -430,40 +441,107 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     Block.popResource(level, mine.getBlockPos(), leftover);
                 }
             }
-            scaffoldFetch = ScaffoldFetch.NONE;
+            fetchKind = FetchKind.NONE;
             return;
         }
         navigate(level, maid, mine.getBlockPos());
     }
 
-    // 存矿（B3 拍板：黑名单外全部入仓）——黑名单：镐/垫脚/光源（流体瓶为填充产物，正常入库）
+    // B3 取镐：就近矿井方块，从仓库取 1 把镐并装备；仓库无镐 → 气泡 + 阻塞等待
+    private void handlePickaxeFetch(ServerLevel level, EntityMaid maid, MineInstance mine)
+    {
+        if (isNear(maid, mine.getBlockPos()))
+        {
+            List<ItemStack> taken = mine.takeFromWarehouse(MineCenterBehavior::isPickaxeItem, 1);
+            if (taken.isEmpty())
+            {
+                showBubbleWithCooldown(maid, "仓库缺镐子", PICKAXE_KEY);
+                waitTicks = WAIT_TICKS;
+                return;
+            }
+            for (ItemStack stack : taken)
+            {
+                ItemStack leftover = addToInventory(maid, stack);
+                if (!leftover.isEmpty())
+                {
+                    Block.popResource(level, mine.getBlockPos(), leftover);
+                }
+            }
+            equipPickaxe(maid);
+            fetchKind = FetchKind.NONE;
+            return;
+        }
+        navigate(level, maid, mine.getBlockPos());
+    }
+
+    private static boolean isPickaxeItem(ItemStack stack)
+    {
+        return !stack.isEmpty() && stack.is(ItemTags.PICKAXES);
+    }
+
+    // 存矿（B3 拍板 2026-09-04 二次修正：保留规则）
+    //   镐（工具）不存；垫脚类/光源类"每类随机保留一种、最多保留一格"，其余整类入仓
+    //   （泥土/圆石既是垫脚也是挖矿产物，不再被黑名单整类误伤）；其余产物（含流体瓶）全部入库
     // 统一走合并容器读写（2026-09-04 修正：之前遍历基础背包，产在扩展背包里等于什么都没看见 → 站桩）
-    private void depositToWarehouse(MineInstance mine, EntityMaid maid)
+    private void depositToWarehouse(MineInstance mine, EntityMaid maid, ServerLevel level)
     {
         CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
-        List<ItemStack> toDeposit = new ArrayList<>();
-        List<Integer> slots = new ArrayList<>();
-        List<ItemResource> resources = new ArrayList<>();
-        List<Integer> amounts = new ArrayList<>();
+        List<SlotRef> entries = new ArrayList<>();
         for (int i = 0; i < inv.size(); i++)
         {
             ItemResource res = inv.getResource(i);
             if (res.isEmpty()) continue;
             ItemStack probe = new ItemStack(res.getItem(), 1);
-            if (isDepositBlacklisted(probe)) continue;
-            int amount = (int) inv.getAmountAsLong(i);
-            toDeposit.add(new ItemStack(res.getItem(), amount));
-            slots.add(i);
-            resources.add(res);
-            amounts.add(amount);
+            if (probe.is(ItemTags.PICKAXES)) continue;      // 工具不存
+            Category cat = isScaffoldItem(probe) ? Category.SCAFFOLD
+                    : isLightItem(probe) ? Category.LIGHT : Category.OTHER;
+            entries.add(new SlotRef(i, res, (int) inv.getAmountAsLong(i), probe, cat));
+        }
+        // 每类随机保留一种、最多保留一格（B3 拍板修正）
+        java.util.Set<Integer> keepSlots = new java.util.HashSet<>();
+        for (Category cat : List.of(Category.SCAFFOLD, Category.LIGHT))
+        {
+            List<SlotRef> catSlots = new ArrayList<>();
+            for (SlotRef e : entries)
+            {
+                if (e.cat() == cat) catSlots.add(e);
+            }
+            if (catSlots.isEmpty()) continue;
+            List<net.minecraft.world.item.Item> types = new ArrayList<>();
+            for (SlotRef e : catSlots)
+            {
+                if (!types.contains(e.probe().getItem())) types.add(e.probe().getItem());
+            }
+            net.minecraft.world.item.Item keepType = types.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(types.size()));
+            for (SlotRef e : catSlots)
+            {
+                if (e.probe().getItem() == keepType)
+                {
+                    keepSlots.add(e.slot());                // 该类型只保留第一格
+                    break;
+                }
+            }
+        }
+        // 待入库 = 全部扫描项 - 保留项
+        List<ItemStack> toDeposit = new ArrayList<>();
+        List<Integer> dSlots = new ArrayList<>();
+        List<ItemResource> dRes = new ArrayList<>();
+        List<Integer> dAmounts = new ArrayList<>();
+        for (SlotRef e : entries)
+        {
+            if (keepSlots.contains(e.slot())) continue;
+            toDeposit.add(new ItemStack(e.probe().getItem(), e.amount()));
+            dSlots.add(e.slot());
+            dRes.add(e.res());
+            dAmounts.add(e.amount());
         }
         if (toDeposit.isEmpty()) return;
         mine.depositToWarehouse(toDeposit);
-        for (int k = 0; k < slots.size(); k++)
+        for (int k = 0; k < dSlots.size(); k++)
         {
             try (Transaction tx = Transaction.openRoot())
             {
-                inv.extract(slots.get(k), resources.get(k), amounts.get(k), tx);
+                inv.extract(dSlots.get(k), dRes.get(k), dAmounts.get(k), tx);
                 tx.commit();
             }
         }
@@ -616,15 +694,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 放置光源（任意可放置且发光的方块物品，B2 判定）
-    // 走原版 BlockItem.place（带贴面朝向上下文，2026-09-04 修正）：
-    // 火把贴墙/灯笼落地/萤石任意——按六向邻接实体块自动选支撑面
+    // 放置光源（2026-09-04 崩溃修复：不再走需要 Player 的 BlockPlaceContext，手动放置）
+    //   下方有实体 → 任意光源物品放默认状态（落地火把/灯笼/萤石）
+    //   下方无实体但水平侧面有墙且为火把 → 放贴墙火把（WallTorchBlock.FACING 按支撑面设置）
+    //   都不满足 → false（调用方放弃该灯位）
     private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, BlockPos target)
     {
-        if (!level.getBlockState(target).isAir()) return false;
-        Direction face = findSupportFace(level, target);
-        if (face == null) return false;
-        BlockPos neighbor = target.relative(face.getOpposite());
+        BlockState below = level.getBlockState(target.below());
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         for (int i = 0; i < inv.size(); i++)
         {
@@ -634,11 +710,20 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             if (!isLightItem(stack)) continue;
             if (!(stack.getItem() instanceof BlockItem bi)) continue;
 
-            BlockHitResult hit = new BlockHitResult(
-                    Vec3.atCenterOf(neighbor), face, neighbor, false);
-            BlockPlaceContext ctx = new BlockPlaceContext(
-                    level, null, InteractionHand.MAIN_HAND, stack, hit);
-            if (!bi.place(ctx).consumesAction()) continue;
+            BlockState placeState;
+            if (below.isSolid())
+            {
+                placeState = bi.getBlock().defaultBlockState();
+            }
+            else
+            {
+                if (!stack.is(Items.TORCH)) continue;
+                Direction facing = findWallFace(level, target);
+                if (facing == null) continue;
+                placeState = Blocks.WALL_TORCH.defaultBlockState()
+                        .setValue(WallTorchBlock.FACING, facing);
+            }
+            level.setBlock(target, placeState, 3);
             try (Transaction tx = Transaction.openRoot())
             {
                 inv.extract(i, res, 1, tx);
@@ -649,10 +734,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 找目标格的实体支撑面（六向扫邻接实体块），返回"从支撑块指向目标格"的方向
-    private static Direction findSupportFace(ServerLevel level, BlockPos target)
+    // 找水平方向上的实体墙（火把贴墙面），返回"从墙指向目标格"的朝向
+    private static Direction findWallFace(ServerLevel level, BlockPos target)
     {
-        for (Direction d : Direction.values())
+        for (Direction d : new Direction[]{Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST})
         {
             BlockPos neighbor = target.relative(d);
             BlockState state = level.getBlockState(neighbor);
@@ -662,6 +747,51 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             }
         }
         return null;
+    }
+
+    // 女仆背包（基础背包）里是否还有光源物品（SETLIGHT 放置失败时区分"没灯"与"放不了"）
+    private static boolean hasLightInInv(EntityMaid maid)
+    {
+        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        for (int i = 0; i < inv.size(); i++)
+        {
+            ItemResource res = inv.getResource(i);
+            if (res.isEmpty()) continue;
+            if (isLightItem(new ItemStack(res.getItem(), 1))) return true;
+        }
+        return false;
+    }
+
+    // 真挖掘（2026-09-04 拍板）：原版公式逐 tick 推进，速度自然关联工具与方块
+    //   每 tick 进度 += 工具速度 ÷ 方块硬度 ÷ (可正确掉落 ? 30 : 100)
+    //   破坏裂纹实时渲染（destroyBlockProgress 0~9），完成时扣 1 点耐久 + 收集掉落物
+    // 返回 true = 挖掘完成（已破坏并收集）
+    private boolean progressDig(ServerLevel level, EntityMaid maid, BlockPos pos, BlockState state)
+    {
+        float hardness = state.getDestroySpeed(level, pos);
+        if (hardness < 0)
+        {
+            return false;   // 基岩类（派发侧困难表兜底）
+        }
+        if (!pos.equals(digPos))
+        {
+            digPos = pos;
+            digProgress = 0f;
+        }
+        ItemStack tool = maid.getMainHandItem();
+        float speed = tool.getDestroySpeed(state);
+        boolean canHarvest = tool.isCorrectToolForDrops(state);
+        digProgress += speed / hardness / (canHarvest ? DIG_DIVISOR : DIG_WRONG_TOOL_DIVISOR);
+        level.destroyBlockProgress(maid.getId(), pos, Math.min(9, (int) (digProgress * 10f)));
+        if (digProgress < 1f) return false;
+
+        // 完成：清除裂纹 → 收集掉落 → 扣 1 点耐久
+        level.destroyBlockProgress(maid.getId(), pos, -1);
+        mineAndCollect(level, maid, pos);
+        maid.getMainHandItem().hurtAndBreak(1, maid, EquipmentSlot.MAINHAND);
+        digProgress = 0f;
+        digPos = null;
+        return true;
     }
 
     // 把物品插入女仆背包，返回塞不下的部分（优先同类合并，再空格）
@@ -746,16 +876,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return null;
     }
 
-    // 存矿黑名单（B3 拍板 2026-09-04 修正）：镐/垫脚/光源不存；流体瓶为填充流体的产物，正常入库
-    private static boolean isDepositBlacklisted(ItemStack stack)
-    {
-        if (stack.isEmpty()) return false;
-        if (stack.is(ItemTags.PICKAXES)) return true;
-        if (isScaffoldItem(stack)) return true;
-        if (isLightItem(stack)) return true;
-        return false;
-    }
-
     // ===================== 库存/装备/气泡 =====================
 
     private static int freeSlots(EntityMaid maid)
@@ -821,14 +941,20 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
 
     // ===================== 任务解绑/矿井解析/收尾 =====================
 
-    // 任务未完成释放：解绑子任务（坐标回池子）
+    // 任务未完成释放：解绑子任务（坐标回池子）+ 清除破坏裂纹
     private void releaseCurrent(MineInstance mine, EntityMaid maid)
     {
         if (currentTask != null)
         {
             mine.releaseWork(maid);
+            if (digPos != null)
+            {
+                maid.level().destroyBlockProgress(maid.getId(), digPos, -1);
+            }
         }
         currentTask = null;
+        digProgress = 0f;
+        digPos = null;
     }
 
     private MineInstance mineById(ServerLevel level)
@@ -892,10 +1018,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         currentTask = null;
         reachedTarget = false;
         navFailCount = 0;
-        mineTimer = 0;
         waitTicks = 0;
         finished = false;
         pendingDeposit = false;
-        scaffoldFetch = ScaffoldFetch.NONE;
+        digProgress = 0f;
+        digPos = null;
+        fetchKind = FetchKind.NONE;
     }
 }

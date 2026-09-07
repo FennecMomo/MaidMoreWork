@@ -398,7 +398,7 @@ public class MineInstance extends ProjectCenterInstance
                     }
                     else
                     {
-                        type = canProcess(level, pos, state)             // 非垫脚实体 → 换（§5）
+                        type = canProcess(level, pos, state, maid)             // 非垫脚实体 → 换（§5）
                                 ? MineTask.Type.REPLACE : null;
                     }
                 }
@@ -409,7 +409,7 @@ public class MineInstance extends ProjectCenterInstance
                         layerProcessed.add(pos);                         // 无方块 → 丢已处理
                         continue;
                     }
-                    type = canProcess(level, pos, state) ? MineTask.Type.DESTROY : null;
+                    type = canProcess(level, pos, state, maid) ? MineTask.Type.DESTROY : null;
                 }
 
                 if (type == null)
@@ -491,7 +491,7 @@ public class MineInstance extends ProjectCenterInstance
                 removeDifficulty(pos);
                 continue;
             }
-            if (!canProcess(level, pos, state)) continue;
+            if (!canProcess(level, pos, state, maid)) continue;
             double dist = pos.distSqr(maid.blockPosition());
             if (dist < bestDist)
             {
@@ -556,11 +556,16 @@ public class MineInstance extends ProjectCenterInstance
         return blockItem.getBlock().defaultBlockState().getLightEmission() > 0;
     }
 
-    // 难度判定（§8 纯布尔，方块侧）：基岩类（破坏耗时 < 0）永远不能；
-    // 工具等级部分（requiresCorrectToolForDrops + 主手判定）随女仆行为批次接入
-    private static boolean canProcess(ServerLevel level, BlockPos pos, BlockState state)
+    // 难度判定（§8 纯布尔，2026-09-04 升级为女仆侧）：基岩类（破坏耗时 < 0）永远不能；
+    // 需要正确工具的方块按女仆主手 isCorrectToolForDrops 判定（铁镐挖黑曜石 → 不能）
+    private static boolean canProcess(ServerLevel level, BlockPos pos, BlockState state, EntityMaid maid)
     {
-        return state.getDestroySpeed(level, pos) >= 0;
+        if (state.getDestroySpeed(level, pos) < 0) return false;
+        if (state.requiresCorrectToolForDrops())
+        {
+            return maid.getMainHandItem().isCorrectToolForDrops(state);
+        }
+        return true;
     }
 
     // 垫脚方块判定（§5）：草方块 + 泥土/木板/圆石/石头（2026-09-04 拍板：草方块显式计入，
