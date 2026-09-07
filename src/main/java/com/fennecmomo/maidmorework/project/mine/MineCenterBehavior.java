@@ -49,6 +49,9 @@ import java.util.UUID;
 // 装备：开工装备镐（复用旧 equipPickaxe 模式）
 public class MineCenterBehavior extends Behavior<EntityMaid>
 {
+    // 诊断日志（2026-09-04 测试期临时接入，问题定位后移除）
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(MineCenterBehavior.class);
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
     private static final int MAX_NAV_FAIL = 3;          // 导航失败次数上限，超过后强制到达
@@ -231,7 +234,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     finishTask(mine, maid, task);
                     return;
                 }
-                maid.swing(maid.getUsedItemHand());
                 if (progressDig(level, maid, mine, task, target, state))
                 {
                     checkBelowSafety(level, maid, target);
@@ -268,7 +270,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     handleSourceFluid(level, maid, mine, task, target);
                     return;
                 }
-                if (state.isAir() || isScaffoldState(state))
+                if (state.isAir())
                 {
                     if (tryPlaceScaffold(level, maid, target))
                     {
@@ -280,13 +282,16 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                         releaseCurrent(mine, maid);
                         fetchKind = FetchKind.SCAFFOLD;
                     }
+                    return;
                 }
-                else
+                if (isScaffoldState(state))
                 {
-                    // 非垫脚实体块 → 真挖掘，挖完不交任务，下一 tick 走垫脚阶段
-                    maid.swing(maid.getUsedItemHand());
-                    progressDig(level, maid, mine, task, target, state);
+                    // 已是垫脚（如被其他女仆先垫）→ 直接完成，防"放置失败-取货"空转环
+                    finishTask(mine, maid, task);
+                    return;
                 }
+                // 非垫脚实体块 → 真挖掘，挖完不交任务，下一 tick 走垫脚阶段
+                progressDig(level, maid, mine, task, target, state);
             }
 
             // === SETLIGHT：位上有光源视为完成；有方块先挖；否则放置 ===
@@ -300,7 +305,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 if (!state.isAir())
                 {
                     // 位上有方块 → 真挖掘，挖完下一 tick 走放置
-                    maid.swing(maid.getUsedItemHand());
                     progressDig(level, maid, mine, task, target, state);
                     return;
                 }
@@ -513,6 +517,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (best != null)
         {
             equipCandidate(maid, best);
+            LOGGER.info("[MineDebug] 工具流程(步骤3 自身推荐) 装备 {} @ {}",
+                    best.stack().getItem(), state.getBlock());
             return ToolResolution.READY;
         }
         // 4. 仓库推荐
@@ -521,12 +527,16 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             toolFetchSpec = new ToolFetchSpec(task.pos(), true, needsPickaxe, needsShovel, needsAxe, needsHoe);
             fetchKind = FetchKind.TOOL;
             releaseCurrent(mine, maid);
+            LOGGER.info("[MineDebug] 工具流程(步骤4 仓库推荐) 去仓库取 {} @ {}",
+                    state.getBlock(), task.pos().toShortString());
             return ToolResolution.FETCH;
         }
         // 5. 非必须 → 空手挖（主手收回背包）
         if (!required)
         {
             stashMainHand(maid);
+            LOGGER.info("[MineDebug] 工具流程(步骤5 非必须空手) {} @ {}",
+                    state.getBlock(), task.pos().toShortString());
             return ToolResolution.READY;
         }
         // 6. 自身必要（能正确掉落即可，不限类型）
@@ -534,6 +544,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (best != null)
         {
             equipCandidate(maid, best);
+            LOGGER.info("[MineDebug] 工具流程(步骤6 自身必要) 装备 {} @ {}",
+                    best.stack().getItem(), state.getBlock());
             return ToolResolution.READY;
         }
         // 7. 仓库必要
@@ -542,9 +554,14 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             toolFetchSpec = new ToolFetchSpec(task.pos(), false, false, false, false, false);
             fetchKind = FetchKind.TOOL;
             releaseCurrent(mine, maid);
+            LOGGER.info("[MineDebug] 工具流程(步骤7 仓库必要) 去仓库取 @ {}",
+                    task.pos().toShortString());
             return ToolResolution.FETCH;
         }
-        // 8. 不可挖掘 → 困难表 + 失败冷却
+        // 8. 不可挖掘 → 移出当前层池（防重复派发空挥）+ 困难表 + 失败冷却
+        LOGGER.info("[MineDebug] 工具流程(步骤8 不可挖掘) {} required={} @ {}",
+                state.getBlock(), required, task.pos().toShortString());
+        mine.markImpossible(task.pos());
         mine.addHardTask(new MineTask(task.pos(), task.type()));
         mine.failHardTask(level, task);
         releaseCurrent(mine, maid);
@@ -931,10 +948,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 {
                     digPos = null;
                     digProgress = 0f;
-                    return false;       // 已进困难表并释放任务
+                    return false;       // 已移出层池+进困难表并释放任务
                 }
             }
         }
+        // 就绪后才挥手/累计进度（不可挖掘的坐标不会出现挥空手）
+        maid.swing(maid.getUsedItemHand());
         ItemStack tool = maid.getMainHandItem();
         float speed = tool.getDestroySpeed(state);
         boolean canHarvest = tool.isCorrectToolForDrops(state);

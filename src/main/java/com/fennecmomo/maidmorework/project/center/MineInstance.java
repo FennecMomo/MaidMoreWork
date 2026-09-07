@@ -42,6 +42,9 @@ import java.util.UUID;
 // （与旧版 computeCycle 同策略，实时方块状态即进度真相）
 public class MineInstance extends ProjectCenterInstance
 {
+    // 诊断日志（2026-09-04 测试期临时接入，问题定位后移除）
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(MineInstance.class);
     // ===================== 多态序列化 =====================
 
     public static final MapCodec<MineInstance> MAP_CODEC =
@@ -490,10 +493,15 @@ public class MineInstance extends ProjectCenterInstance
         if (settleWaitUntil == 0)
         {
             settleWaitUntil = now + SETTLE_WAIT_TICKS;
+            LOGGER.info("[MineDebug] 层池清空，2s复核等待 周期C{} 层#{} Y={}",
+                    cycle, layerIndex, y);
             return null;
         }
         if (now < settleWaitUntil) return null;
         settleWaitUntil = 0;
+        LOGGER.info("[MineDebug] 层结算推进 周期C{} 层#{} → 周期C{} 层#{}",
+                cycle, layerIndex, cycleLayerYs.size() > layerIndex + 1 ? cycle : cycle + 1,
+                layerIndex + 1 >= cycleLayerYs.size() ? 0 : layerIndex + 1);
         advanceLayer(level);
         return null;
     }
@@ -522,6 +530,19 @@ public class MineInstance extends ProjectCenterInstance
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
         (solid ? sealedSolid : sealedAir).add(immutable);
+    }
+
+    // 不可挖掘坐标（§8 步骤8）移出当前层正常池（防重复派发空挥）+ 记层困难表（结算上缴跨层重试）
+    public void markImpossible(BlockPos pos)
+    {
+        BlockPos immutable = pos.immutable();
+        layerProcessed.add(immutable);
+        if (!layerHardList.contains(immutable))
+        {
+            layerHardList.add(immutable);
+        }
+        LOGGER.info("[MineDebug] 不可挖掘→移出当前层池+记层困难表 周期C{} 层#{} @ {}",
+                cycle, layerIndex, immutable.toShortString());
     }
 
     // 女仆放弃子任务：仅解绑，坐标回池子（§3 离场协议）
@@ -581,6 +602,10 @@ public class MineInstance extends ProjectCenterInstance
         for (MineTask t : satisfied)
         {
             hardFailCooldown.remove(t.pos());
+        }
+        if (best != null)
+        {
+            LOGGER.info("[MineDebug] 困难表派出 {} @ {}", best.type(), best.pos().toShortString());
         }
         return best;
     }
@@ -745,8 +770,12 @@ public class MineInstance extends ProjectCenterInstance
             boolean violated = expectEmpty ? !state.isAir() : state.isAir();
             if (violated)
             {
-                addHardTask(new MineTask(pos.immutable(),
-                        expectEmpty ? MineTask.Type.DESTROY : MineTask.Type.FILL));
+                MineTask violation = new MineTask(pos.immutable(),
+                        expectEmpty ? MineTask.Type.DESTROY : MineTask.Type.FILL);
+                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} (期望{}实际{})", violation.type(),
+                        pos.toShortString(), expectEmpty ? "空" : "非空",
+                        expectEmpty ? state.getBlock().getName().getString() : "空气");
+                addHardTask(violation);
             }
         }
         if (expectEmpty) airCursor = end >= list.size() ? 0 : end;
@@ -764,6 +793,8 @@ public class MineInstance extends ProjectCenterInstance
     {
         this.exhausted = true;
         layerSubtasks.clear();
+        LOGGER.info("[MineDebug] 矿井已挖尽 周期C{} 层#{} 困难表{} 空置封存{} 实体封存{}",
+                cycle, layerIndex, mineHardTasks.size(), sealedAir.size(), sealedSolid.size());
     }
 
     // ===================== 调试 =====================
