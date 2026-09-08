@@ -60,10 +60,12 @@ public class MineCenterBlockEntity extends ProjectCenterBlockEntity
     }
 
     // 确认创建时写入完整矿井身份（基类 setInstanceData 负责通用字段与客户端推送）
+    // 矿井创建即定型"采矿"类型（2026-09-04 拍板），标记工具点击直达配置页
     public void setMineIdentity(UUID id, UUID owner, int radius, int anchor,
                                 BlockPos shaftCornerNW, BlockPos shaftCornerSE)
     {
         setInstanceData(id, owner, radius, anchor);
+        setProjectTypeId(com.fennecmomo.maidmorework.project.type.MiningProjectType.ID);
         this.shaftCornerNW = shaftCornerNW.immutable();
         this.shaftCornerSE = shaftCornerSE.immutable();
         setChanged();

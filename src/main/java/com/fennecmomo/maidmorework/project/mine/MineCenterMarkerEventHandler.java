@@ -74,22 +74,36 @@ public class MineCenterMarkerEventHandler
         setCorner(event.getEntity(), event.getPos(), true);
     }
 
-    // 右键方块：矿井方块 → 信息；普通方块 → 设角点2
+    // 右键方块：矿井方块 → 直达矿井配置页（2026-09-04 拍板：类型已定型，不再弹类型选择）；
+    // 普通方块 → 设角点2
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event)
     {
         if (!(event.getEntity().getMainHandItem().getItem() instanceof MineCenterMarkerItem)) return;
         if (event.getLevel().isClientSide()) return;
 
-        if (event.getLevel().getBlockEntity(event.getPos()) instanceof MineCenterBlockEntity)
+        if (event.getLevel().getBlockEntity(event.getPos()) instanceof MineCenterBlockEntity be)
         {
             if (event instanceof ICancellableEvent c) c.setCanceled(true);
-            showMineInfo(event.getEntity(), event.getPos());
+            openMineEdit(event.getEntity(), (ServerLevel) event.getLevel(), be);
             return;
         }
 
         if (event instanceof ICancellableEvent c) c.setCanceled(true);
         setCorner(event.getEntity(), event.getPos(), false);
+    }
+
+    // 打开矿井配置页（编辑半径/锚点/命名；类型锁死为"采矿"）
+    private static void openMineEdit(net.minecraft.world.entity.player.Player player,
+                                     ServerLevel level, MineCenterBlockEntity be)
+    {
+        if (!(player instanceof ServerPlayer sp) || !be.hasInstance()) return;
+        var inst = ProjectCenterManager.get(level, be.getId());
+        if (inst == null) return;
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp,
+                new com.fennecmomo.maidmorework.project.center.ProjectCenterEditPayload(
+                        inst.getId(), inst.getBlockPos(), inst.getRadius(), inst.getAnchor(),
+                        inst.getProjectTypeId(), inst.getName()));
     }
 
     // 右键空气：两角点齐全 → 弹确认创建窗口
@@ -128,18 +142,6 @@ public class MineCenterMarkerEventHandler
                     + "§7（右键空气打开确认窗）"));
         }
         level.playSound(null, pos, SoundEvents.STONE_PLACE, SoundSource.PLAYERS, 0.5f, 1.0f);
-    }
-
-    private static void showMineInfo(Player player, BlockPos pos)
-    {
-        Level level = player.level();
-        if (level.getBlockEntity(pos) instanceof MineCenterBlockEntity be && be.hasInstance())
-        {
-            player.sendSystemMessage(Component.literal(
-                    "§b矿井中心 | §f" + be.getShaftLength() + "x" + be.getShaftWidth()
-                    + "§b, 边界半径: §f" + be.getRadius()
-                    + (be.isExhausted() ? "§c, 已挖尽" : "")));
-        }
     }
 
     // ===================== 创建确认 =====================

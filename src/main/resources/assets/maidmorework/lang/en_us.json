@@ -8,6 +8,8 @@
   "task.maidmorework.eat": "Eat",
   "task.maidmorework.idle": "Idle",
   "projecttype.maidmorework.chopping": "Chopping",
+  "projecttype.maidmorework.mining": "Mining",
+  "projecttype.maidmorework.mining.desc": "Dig the mine shaft layer by layer",
   "projecttype.maidmorework.chopping.desc": "Chop trees and collect wood within the project area",
   "projecttype.maidmorework.chopping.target": "Logs"
 }

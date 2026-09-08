@@ -183,11 +183,13 @@ public final class ProjectCenterManager
 
     // 放置矿井方块时创建矿井实例（create 的子类版，矿井放置流程调用）
     // 竖井形状参数（两角点）由标记工具框定，随实例持久化（A1 拍板）
+    // 矿井创建即定型"采矿"类型（2026-09-04 拍板），标记工具点击直达配置页
     public static void createMine(ServerLevel level, UUID id, UUID owner, BlockPos pos,
                                   int radius, int anchor, BlockPos shaftCornerNW, BlockPos shaftCornerSE)
     {
         Entry e = entry(level);
         MineInstance inst = new MineInstance(id, owner, pos, radius, anchor, shaftCornerNW, shaftCornerSE);
+        inst.setProjectTypeId(com.fennecmomo.maidmorework.project.type.MiningProjectType.ID);
         e.byId().put(id, inst);
     }
 

@@ -89,6 +89,21 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
 
     private ToolFetchSpec toolFetchSpec = null;
 
+    // 当前阶段名（阶段切换日志用）
+    private String currentState = "未启动";
+    private String lastDetail = "";
+
+    // 阶段切换日志：女仆=id 旧阶段→新阶段 明细（2026-09-04 拍板：所有切换点全量打点）
+    // 同阶段同明细的连续调用不重复打印（如暂停等待的逐 tick 进入）
+    private void logTransition(EntityMaid maid, String to, String detail)
+    {
+        String from = currentState;
+        if (from.equals(to) && lastDetail.equals(detail)) return;
+        currentState = to;
+        lastDetail = detail;
+        LOGGER.info("[MineDebug] 女仆={} {}→{} {}", shortId(maid), from, to, detail);
+    }
+
     // 入库扫描项（B3 保留规则用）
     private record SlotRef(int slot, ItemResource res, int amount, ItemStack probe, Category cat) {}
 
@@ -131,6 +146,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             finished = true;
             return;
         }
+        logTransition(maid, "挖矿循环", "加入中心 id=" + mine.getId().toString().substring(0, 8));
         equipPickaxe(maid);
         mineId = mine.getId();
         mine.joinCenter(maid);
@@ -152,6 +168,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (mine == null || mine.isExhausted())
         {
             finished = true;
+            logTransition(maid, "结束", mine == null ? "矿井失联" : "矿井已挖尽");
             return;
         }
 
@@ -164,6 +181,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         // B3：背包满（产物入包后检测）→ 去仓库存放
         if (pendingDeposit)
         {
+            logTransition(maid, "存矿", "背包满");
             handleDeposit(level, maid, mine);
             return;
         }
@@ -171,11 +189,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         // FILL/REPLACE 缺垫脚 / 工具流程需仓库供货 → 取货支线
         if (fetchKind == FetchKind.SCAFFOLD)
         {
+            logTransition(maid, "取垫脚", "缺垫脚方块");
             handleScaffoldFetch(level, maid, mine);
             return;
         }
         if (fetchKind == FetchKind.TOOL)
         {
+            logTransition(maid, "取工具", toolFetchSpec != null && toolFetchSpec.recommended() ? "取推荐工具" : "取必要工具");
             handleToolFetch(level, maid, mine);
             return;
         }
@@ -183,6 +203,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         // 层暂停（2026-09-04 拍板）：无可领任务时到工程中心旁等待，恢复后自动继续
         if (mine.isLayerPaused() && currentTask == null)
         {
+            logTransition(maid, "暂停等待", "层不可处理方块超过10%，等待补货");
             if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
             return;
         }
@@ -196,6 +217,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             reachedTarget = false;
             digProgress = 0f;
             digPos = null;
+            logTransition(maid, "执行任务", task.type() + " @ " + task.pos().toShortString());
         }
 
         MineTask task = currentTask;
@@ -256,8 +278,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
                 else
                 {
-                    // 缺垫脚 → 释放任务 + 取货支线（B3）
-                    showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
+                    // 缺垫脚 → 释放任务 + 取货支线（B3，静默执行，仓库无货才在取货处冒泡）
                     releaseCurrent(mine, maid);
                     fetchKind = FetchKind.SCAFFOLD;
                 }
@@ -279,19 +300,18 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     }
                     else
                     {
-                        showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
                         releaseCurrent(mine, maid);
                         fetchKind = FetchKind.SCAFFOLD;
                     }
                     return;
                 }
-                if (isScaffoldState(state))
+                if (isScaffoldState(state) || !state.is(Tags.Blocks.ORES))
                 {
-                    // 已是垫脚（如被其他女仆先垫）→ 直接完成，防"放置失败-取货"空转环
+                    // 已是垫脚（如被其他女仆先垫）/ 非矿物实体（砂岩/石头等无需替换，2026-09-04 拍板）→ 直接完成
                     finishTask(mine, maid, task);
                     return;
                 }
-                // 非垫脚实体块 → 真挖掘，挖完不交任务，下一 tick 走垫脚阶段
+                // 保留位矿物 → 真挖掘回收，挖完不交任务，下一 tick 走垫脚阶段
                 progressDig(level, maid, mine, task, target, state);
             }
 
@@ -333,6 +353,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 {
                     // 仓库无光源：气泡提示 + 阻塞等待（请求机制属后续规划，暂以提示替代）
                     showBubbleWithCooldown(maid, "仓库缺光源，等待补充", LIGHT_KEY);
+                    logTransition(maid, "等待", "仓库无光源");
                     waitTicks = WAIT_TICKS;
                     return;
                 }
@@ -384,7 +405,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
         else
         {
-            showBubbleWithCooldown(maid, "需要垫脚方块（去仓库取）", SCAFFOLD_KEY);
             releaseCurrent(mine, maid);
             fetchKind = FetchKind.SCAFFOLD;
         }
@@ -397,9 +417,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         mine.completeWork(maid, task);
         currentTask = null;
         reachedTarget = false;
+        logTransition(maid, "挖矿循环", "完成 " + task.type() + " @ " + task.pos().toShortString());
         if (freeSlots(maid) == 0)
         {
             pendingDeposit = true;
+            logTransition(maid, "存矿", "背包满");
         }
     }
 
@@ -413,6 +435,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             depositToWarehouse(mine, maid, level);
             pendingDeposit = false;
+            logTransition(maid, "挖矿循环", "存矿完成");
             return;
         }
         if (!maid.getNavigation().isInProgress())
@@ -423,6 +446,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             if (!moved && ++navFailCount >= MAX_NAV_FAIL)
             {
                 showBubbleWithCooldown(maid, "无法返回仓库，继续干活", LIGHT_KEY);
+                logTransition(maid, "挖矿循环", "无法返回仓库，放弃本次存货");
                 pendingDeposit = false;
                 navFailCount = 0;
             }
@@ -438,6 +462,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             if (taken.isEmpty())
             {
                 showBubbleWithCooldown(maid, "仓库缺垫脚方块", SCAFFOLD_KEY);
+                logTransition(maid, "等待", "仓库无垫脚方块");
                 waitTicks = WAIT_TICKS;
                 return;
             }
@@ -450,6 +475,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
             fetchKind = FetchKind.NONE;
+            logTransition(maid, "挖矿循环", "取垫脚完成");
             return;
         }
         navigate(level, maid, mine.getBlockPos());
@@ -490,6 +516,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             equipPickaxe(maid);     // 先粗装，下次挖掘前装备流程精调
             toolFetchSpec = null;
             fetchKind = FetchKind.NONE;
+            logTransition(maid, "挖矿循环", "取工具完成");
             return;
         }
         navigate(level, maid, mine.getBlockPos());
@@ -498,17 +525,18 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     // ===================== §8 装备流程（2026-09-04 终版：可行性已在派发侧确认） =====================
 
     //   顺序：自身推荐 → 装备开挖 | 仓库推荐 → 取货支线 | 非必须 → 空手 | 自身必要 → 装备 | 仓库必要 → 取货支线
-    //   （五级可行性在派发侧已确认任一成立，本流程只负责"用上合适的工具"，不存在不可挖掘出口）
+    //   （五级可行性在派发侧已确认任一成立，本流程只负责"用上合适的工具"）
     // 返回 true = 可以开挖；false = 已设取货支线（任务保持绑定，fetchKind=TOOL 接管）
-    private boolean equipFor(ServerLevel level, EntityMaid maid, MineInstance mine, BlockPos pos, BlockState state)
+    private boolean equipFor(ServerLevel level, EntityMaid maid, MineInstance mine,
+                             MineTask task, BlockPos pos, BlockState state)
     {
         // 自身推荐
         ToolCandidate best = bestToolInInv(maid, state, true);
         if (best != null)
         {
             equipCandidate(maid, best);
-            LOGGER.info("[MineDebug] 装备流程(自身推荐) 装备 {} @ {}",
-                    best.stack().getItem(), state.getBlock());
+            LOGGER.info("[MineDebug] 女仆={} 装备流程(自身推荐) 装备 {} @ {}",
+                    shortId(maid), best.stack().getItem(), state.getBlock());
             return true;
         }
         // 仓库推荐
@@ -522,7 +550,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (!state.requiresCorrectToolForDrops())
         {
             stashMainHand(maid);
-            LOGGER.info("[MineDebug] 装备流程(非必须空手) {} @ {}", state.getBlock(), pos.toShortString());
+            LOGGER.info("[MineDebug] 女仆={} 装备流程(非必须空手) {} @ {}",
+                    shortId(maid), state.getBlock(), pos.toShortString());
             return true;
         }
         // 自身必要（能正确掉落即可，不限类型）
@@ -530,8 +559,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (best != null)
         {
             equipCandidate(maid, best);
-            LOGGER.info("[MineDebug] 装备流程(自身必要) 装备 {} @ {}",
-                    best.stack().getItem(), state.getBlock());
+            LOGGER.info("[MineDebug] 女仆={} 装备流程(自身必要) 装备 {} @ {}",
+                    shortId(maid), best.stack().getItem(), state.getBlock());
             return true;
         }
         // 仓库必要
@@ -541,10 +570,18 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             fetchKind = FetchKind.TOOL;
             return false;
         }
-        // 理论不可达（派发侧已确认可行）——兜底：释放重派
-        LOGGER.info("[MineDebug] 装备流程兜底触发（仓库竞态）{}", state.getBlock());
+        // 五级全空（SETLIGHT 先挖段等未预检路径 / 仓库竞态）→ 直接上报困难表 + 缺工具记录
+        LOGGER.info("[MineDebug] 女仆={} 装备流程(五级全空→困难表) {} @ {}",
+                shortId(maid), state.getBlock(), pos.toShortString());
+        mine.recordMissingTool(state);
+        mine.addHardTask(new MineTask(pos, task.type()));
         releaseCurrent(mine, maid);
         return false;
+    }
+
+    private static String shortId(EntityMaid maid)
+    {
+        return maid.getUUID().toString().substring(0, 8);
     }
 
     // 自身（主手+背包）中满足判定的最优工具（对目标方块速度最高）
@@ -907,7 +944,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (!pos.equals(digPos))
         {
             // 可行性已在派发侧确认，这里只跑装备流程（自身/仓库取用）
-            if (!equipFor(level, maid, mine, pos, state))
+            if (!equipFor(level, maid, mine, task, pos, state))
             {
                 digPos = null;
                 digProgress = 0f;
@@ -986,12 +1023,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 || block.builtInRegistryHolder().is(Tags.Blocks.STONES);
     }
 
-    // 光源物品（B2 判定）：可放置且发光
+    // 光源物品（B2 判定 2026-09-04 修正：只认火把——灯笼无法贴墙挂放，待后续单独立项支持）
     private static boolean isLightItem(ItemStack stack)
     {
-        if (stack.isEmpty()) return false;
-        if (!(stack.getItem() instanceof BlockItem bi)) return false;
-        return bi.getBlock().defaultBlockState().getLightEmission() > 0;
+        return !stack.isEmpty() && stack.is(Items.TORCH);
     }
 
     private static boolean isScaffoldState(BlockState state)
@@ -1153,6 +1188,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 mine.leaveCenter(maid);
             }
         }
+        logTransition(maid, "结束", "行为停止");
         maid.getNavigation().stop();
         mineId = null;
         currentTask = null;

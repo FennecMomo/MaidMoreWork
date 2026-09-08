@@ -75,6 +75,13 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
     public int getAnchor() { return anchor; }
     public String getProjectTypeId() { return projectTypeId; }
 
+    // 类型设定（矿井方块创建即定型为"采矿"，2026-09-04 拍板）
+    public void setProjectTypeId(String projectTypeId)
+    {
+        this.projectTypeId = projectTypeId;
+        setChanged();
+    }
+
     @Override
     public BlockPos getMinCorner() { return cornerNW; }
 

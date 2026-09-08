@@ -47,6 +47,11 @@ public class MineInstance extends ProjectCenterInstance
     // 诊断日志（2026-09-04 测试期临时接入，问题定位后移除）
     private static final org.slf4j.Logger LOGGER =
             org.slf4j.LoggerFactory.getLogger(MineInstance.class);
+
+    private static String shortId(UUID uuid)
+    {
+        return uuid.toString().substring(0, 8);
+    }
     // ===================== 多态序列化 =====================
 
     public static final MapCodec<MineInstance> MAP_CODEC =
@@ -62,7 +67,11 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos.CODEC.listOf().optionalFieldOf("sealedAir", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedAir)),
             BlockPos.CODEC.listOf().optionalFieldOf("sealedSolid", List.of())
-                    .forGetter(c -> new ArrayList<>(c.sealedSolid))
+                    .forGetter(c -> new ArrayList<>(c.sealedSolid)),
+            BlockPos.CODEC.listOf().optionalFieldOf("sealedLights", List.of())
+                    .forGetter(c -> new ArrayList<>(c.sealedLights)),
+            Codec.STRING.listOf().optionalFieldOf("missingTools", List.of())
+                    .forGetter(c -> new ArrayList<>(c.missingToolNotes))
         ).apply(inst, MineInstance::fromCodec));
 
     // Codec 工厂方法：基类字段整体解码后包装成矿井实例
@@ -70,10 +79,11 @@ public class MineInstance extends ProjectCenterInstance
                                           BlockPos shaftCornerNW, BlockPos shaftCornerSE,
                                           boolean exhausted, int cycle, int layerIndex,
                                           List<MineTask> mineHardTasks,
-                                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid)
+                                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
+                                          List<BlockPos> sealedLights, List<String> missingToolNotes)
     {
         return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex,
-                mineHardTasks, sealedAir, sealedSolid);
+                mineHardTasks, sealedAir, sealedSolid, sealedLights, missingToolNotes);
     }
 
     // 扁平组合的 forGetter 引：把矿井实例视作基类交给基类 Codec 编解码
@@ -115,9 +125,11 @@ public class MineInstance extends ProjectCenterInstance
     private final List<MineTask> mineHardTasks = new ArrayList<>();
 
     // 封存列表（2026-09-04 拍板）：女仆完成一格即按动作分类封存
-    //   空置封存 = 记录为空的位置不能有方块；实体封存 = 记录为实体的位置不能是空的
+    //   空置封存 = 记录为空的位置不能有方块；实体封存 = 记录为实体的位置不能是空的；
+    //   光源位封存 = 记录为灯位的位置不能是空的（灯被打掉 → 重派 SETLIGHT，而非补垫脚）
     private final List<BlockPos> sealedAir = new ArrayList<>();
     private final List<BlockPos> sealedSolid = new ArrayList<>();
+    private final List<BlockPos> sealedLights = new ArrayList<>();
 
     // 10s 记录位置检查（分片轮询，游标不持久化）
     private static final int REFRESH_INTERVAL_TICKS = 200;  // 10 秒
@@ -125,6 +137,7 @@ public class MineInstance extends ProjectCenterInstance
     private long lastRefreshGameTime = 0;
     private int airCursor = 0;
     private int solidCursor = 0;
+    private int lightCursor = 0;
 
     // 层结算复核等待（2 秒，2026-09-04 拍板：层清空后等掉落物落网再推进）
     private static final long SETTLE_WAIT_TICKS = 40;
@@ -157,7 +170,8 @@ public class MineInstance extends ProjectCenterInstance
                          BlockPos shaftCornerNW, BlockPos shaftCornerSE,
                          boolean exhausted, int cycle, int layerIndex,
                          List<MineTask> mineHardTasks,
-                         List<BlockPos> sealedAir, List<BlockPos> sealedSolid)
+                         List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
+                         List<BlockPos> sealedLights, List<String> missingToolNotes)
     {
         super(base);
         this.shaftCornerNW = shaftCornerNW;
@@ -168,6 +182,8 @@ public class MineInstance extends ProjectCenterInstance
         this.mineHardTasks.addAll(mineHardTasks);
         this.sealedAir.addAll(sealedAir);
         this.sealedSolid.addAll(sealedSolid);
+        this.sealedLights.addAll(sealedLights);
+        this.missingToolNotes.addAll(missingToolNotes);
     }
 
     // ===================== 多态标签 =====================
@@ -407,6 +423,8 @@ public class MineInstance extends ProjectCenterInstance
         if (hard != null)
         {
             layerSubtasks.put(maid.getUUID(), hard);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {}(困难表) @ {}", shortId(maid.getUUID()),
+                    hard.type(), hard.pos().toShortString());
             return hard;
         }
 
@@ -442,14 +460,15 @@ public class MineInstance extends ProjectCenterInstance
                     {
                         type = MineTask.Type.FILL;                       // 空洞 → 补（§5）
                     }
-                    else if (isScaffoldState(state))
+                    else if (isScaffoldState(state) || !state.is(Tags.Blocks.ORES))
                     {
-                        layerProcessed.add(pos);                         // 垫脚完好 → 丢已处理
+                        // 垫脚完好 → 丢已处理；非矿物实体（砂岩/石头等）→ 无需替换（2026-09-04 拍板）
+                        layerProcessed.add(pos);
                         continue;
                     }
                     else
                     {
-                        type = isProcessableBy(level, pos, state, maid)   // 非垫脚实体 → 换（§5）
+                        type = isProcessableBy(level, pos, state, maid)   // 保留位矿物 → 挖掉回收（§5）
                                 ? MineTask.Type.REPLACE : null;
                     }
                 }
@@ -485,6 +504,8 @@ public class MineInstance extends ProjectCenterInstance
         if (best != null)
         {
             layerSubtasks.put(maid.getUUID(), best);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {} @ {}", shortId(maid.getUUID()),
+                    best.type(), best.pos().toShortString());
             return best;
         }
 
@@ -493,6 +514,8 @@ public class MineInstance extends ProjectCenterInstance
         if (lightTask != null)
         {
             layerSubtasks.put(maid.getUUID(), lightTask);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {} @ {}", shortId(maid.getUUID()),
+                    lightTask.type(), lightTask.pos().toShortString());
             return lightTask;
         }
 
@@ -538,28 +561,30 @@ public class MineInstance extends ProjectCenterInstance
     }
 
     // 女仆完成子任务：解绑 + 封存坐标 + 清除对应困难表条目 + 重置层复核计时
-    // （2026-09-04 拍板：DESTROY → 空置封存；FILL/REPLACE/SETLIGHT → 实体封存（非空即可，火把也算））
+    // （2026-09-04 拍板：DESTROY → 空置封存；FILL/REPLACE → 实体封存；SETLIGHT → 光源位封存）
     public void completeWork(EntityMaid maid, MineTask task)
     {
         layerSubtasks.remove(maid.getUUID());
         settleWaitUntil = 0;
         switch (task.type())
         {
-            case DESTROY -> sealPosition(task.pos(), false);
-            case FILL, REPLACE, SETLIGHT -> sealPosition(task.pos(), true);
+            case DESTROY -> sealAs(task.pos(), sealedAir);
+            case FILL, REPLACE -> sealAs(task.pos(), sealedSolid);
+            case SETLIGHT -> sealAs(task.pos(), sealedLights);
             default -> { }   // FETCH_LIGHT 非坐标任务
         }
         // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
     }
 
-    // 封存坐标：先清两列表中的旧记录（同一格重分类时移动），再按类别入表
-    private void sealPosition(BlockPos pos, boolean solid)
+    // 封存坐标：先清三张封存列表中的旧记录（同一格重分类时移动），再按类别入表
+    private void sealAs(BlockPos pos, List<BlockPos> target)
     {
         BlockPos immutable = pos.immutable();
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
-        (solid ? sealedSolid : sealedAir).add(immutable);
+        sealedLights.remove(immutable);
+        target.add(immutable);
     }
 
     // 女仆放弃子任务：仅解绑，坐标回池子（§3 离场协议）
@@ -657,7 +682,7 @@ public class MineInstance extends ProjectCenterInstance
                 hasLightSource(maid) ? MineTask.Type.SETLIGHT : MineTask.Type.FETCH_LIGHT);
     }
 
-    // 光源判定（B2 拍板）：主手或背包中存在"可放置且发光"的方块物品
+    // 光源判定（B2 拍板 2026-09-04 修正：只认火把——灯笼无法贴墙挂放，待后续单独立项支持）
     private static boolean hasLightSource(EntityMaid maid)
     {
         if (isLightStack(maid.getMainHandItem())) return true;
@@ -667,7 +692,7 @@ public class MineInstance extends ProjectCenterInstance
             ItemResource res = inv.getResource(i);
             if (res.isEmpty()) continue;
             if (res.getItem() instanceof BlockItem blockItem
-                    && blockItem.getBlock().defaultBlockState().getLightEmission() > 0)
+                    && blockItem.getBlock() == net.minecraft.world.level.block.Blocks.TORCH)
             {
                 return true;
             }
@@ -677,9 +702,7 @@ public class MineInstance extends ProjectCenterInstance
 
     private static boolean isLightStack(ItemStack stack)
     {
-        if (stack.isEmpty()) return false;
-        if (!(stack.getItem() instanceof BlockItem blockItem)) return false;
-        return blockItem.getBlock().defaultBlockState().getLightEmission() > 0;
+        return !stack.isEmpty() && stack.getItem() == net.minecraft.world.item.Items.TORCH;
     }
 
     // ===================== 可行性判定（§8 终版：先检查再分配） =====================
@@ -758,7 +781,7 @@ public class MineInstance extends ProjectCenterInstance
     }
 
     // 缺工具数据记录（UI 阶段展示用，当前先持久化字符串描述，去重+上限16条）
-    private void recordMissingTool(BlockState state)
+    public void recordMissingTool(BlockState state)
     {
         String need;
         if (state.is(BlockTags.MINEABLE_WITH_PICKAXE)) need = "镐";
@@ -881,25 +904,24 @@ public class MineInstance extends ProjectCenterInstance
         return (p.getMaxX() - p.getMinX() + 3) * (p.getMaxZ() - p.getMinZ() + 3);
     }
 
-    // 检查封存列表：空置位有方块 → 困难表 DESTROY；实体位为空 → 困难表 FILL
+    // 检查封存列表（2026-09-04 拍板：新增光源位封存——灯被打掉 → 重派 SETLIGHT 而非补垫脚）
     // 分片轮询（每轮每列表至多 REFRESH_SLICE 格），单 tick 成本恒定，游标跨轮持续推进
     private void refreshSealedLists(ServerLevel level)
     {
-        checkSealedSlice(level, true);
-        checkSealedSlice(level, false);
+        int airEnd = checkSealedSlice(level, sealedAir, airCursor, MineTask.Type.DESTROY, false);
+        airCursor = airEnd;
+        int solidEnd = checkSealedSlice(level, sealedSolid, solidCursor, MineTask.Type.FILL, true);
+        solidCursor = solidEnd;
+        int lightEnd = checkSealedSlice(level, sealedLights, lightCursor, MineTask.Type.SETLIGHT, true);
+        lightCursor = lightEnd;
     }
 
-    // expectEmpty=true 检查空置封存（不能有方块）；false 检查实体封存（不能为空）
-    private void checkSealedSlice(ServerLevel level, boolean expectEmpty)
+    // 检查一段封存列表并推进游标；satisfiedWhenEmpty=true → "为空"算违规（实体/灯位）；false → "非空"算违规（空置）
+    // 返回推进后的游标
+    private int checkSealedSlice(ServerLevel level, List<BlockPos> list, int cursor,
+                                 MineTask.Type violationType, boolean satisfiedWhenEmpty)
     {
-        List<BlockPos> list = expectEmpty ? sealedAir : sealedSolid;
-        if (list.isEmpty())
-        {
-            if (expectEmpty) airCursor = 0;
-            else solidCursor = 0;
-            return;
-        }
-        int cursor = expectEmpty ? airCursor : solidCursor;
+        if (list.isEmpty()) return 0;
         if (cursor >= list.size()) cursor = 0;
         int end = Math.min(list.size(), cursor + REFRESH_SLICE);
         for (int i = cursor; i < end; i++)
@@ -907,19 +929,17 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos pos = list.get(i);
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
-            boolean violated = expectEmpty ? !state.isAir() : state.isAir();
+            boolean violated = satisfiedWhenEmpty ? state.isAir() : !state.isAir();
             if (violated)
             {
-                MineTask violation = new MineTask(pos.immutable(),
-                        expectEmpty ? MineTask.Type.DESTROY : MineTask.Type.FILL);
-                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} (期望{}实际{})", violation.type(),
-                        pos.toShortString(), expectEmpty ? "空" : "非空",
-                        expectEmpty ? state.getBlock().getName().getString() : "空气");
-                addHardTask(violation);
+                MineTask task = new MineTask(pos.immutable(), violationType);
+                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} (期望非空实际{})", violationType,
+                        pos.toShortString(),
+                        violated && state.isAir() ? "空气" : state.getBlock().getName().getString());
+                addHardTask(task);
             }
         }
-        if (expectEmpty) airCursor = end >= list.size() ? 0 : end;
-        else solidCursor = end >= list.size() ? 0 : end;
+        return end >= list.size() ? 0 : end;
     }
 
     // ===================== 挖尽状态（D2） =====================
