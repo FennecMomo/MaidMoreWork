@@ -603,6 +603,12 @@ public class ProjectCenterInstance
         pendingDestroy.put(pos, maidUuid);
     }
 
+    // 中心在场成员（已加入中心的 UUID 集合，供矿井复核等场景解析在场女仆）
+    public Set<UUID> getMemberIds()
+    {
+        return savedHomes.keySet();
+    }
+
     // ===================== 通用仓库（A1 拍板：全中心通用的"工程临时仓库"） =====================
 
     public List<ItemStack> getWarehouse()

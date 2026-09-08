@@ -74,7 +74,7 @@ public class MineCenterCommand
             player.sendSystemMessage(Component.literal("§c请手持矿井标记工具"));
             return 0;
         }
-        MineCenterMarkerItem.clearCorners(player.getMainHandItem());
+        MineCenterMarkerEventHandler.clearPendingCorners(player);
         player.sendSystemMessage(Component.literal("§e已取消矿井创建，角点已清空"));
         return 1;
     }

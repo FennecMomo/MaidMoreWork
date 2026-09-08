@@ -10,12 +10,14 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
+import net.neoforged.neoforge.transfer.item.ItemStacksResourceHandler;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -128,9 +130,13 @@ public class MineInstance extends ProjectCenterInstance
     private static final long SETTLE_WAIT_TICKS = 40;
     private long settleWaitUntil = 0;
 
-    // 困难表失败冷却（取表后判定仍不可挖掘的坐标，短期内不再取出）
-    private static final long HARD_FAIL_COOLDOWN_TICKS = 100;
-    private final Map<BlockPos, Long> hardFailCooldown = new HashMap<>();
+    // 层暂停（2026-09-04 拍板）：结算复核后不可处理方块超过该层总格数 10% → 暂停，
+    // 等待补货后自动恢复（临时状态，重载后由结算流程重新推导）
+    private static final float PAUSE_RATIO = 0.10f;
+    private boolean layerPaused = false;
+
+    // 缺工具数据记录（UI 阶段展示用，当前先持久化字符串描述）
+    private final List<String> missingToolNotes = new ArrayList<>();
 
     // ===================== 构造 =====================
 
@@ -418,6 +424,8 @@ public class MineInstance extends ProjectCenterInstance
             {
                 BlockPos pos = new BlockPos(x, y, z);
                 if (layerProcessed.contains(pos) || lights.contains(pos) || isClaimed(pos)) continue;
+                // 层困难表内坐标不重复派发（2026-09-04 拍板：先检查再分配，表内由复核机制统一重判）
+                if (layerHardList.contains(pos)) continue;
 
                 BlockState state = level.getBlockState(pos);
                 // 灯位保护（2026-09-04 拍板）：发光且非流体的方块一格永不进挖掘池
@@ -441,7 +449,7 @@ public class MineInstance extends ProjectCenterInstance
                     }
                     else
                     {
-                        type = canProcess(level, pos, state)                    // 非垫脚实体 → 换（§5）
+                        type = isProcessableBy(level, pos, state, maid)   // 非垫脚实体 → 换（§5）
                                 ? MineTask.Type.REPLACE : null;
                     }
                 }
@@ -452,15 +460,17 @@ public class MineInstance extends ProjectCenterInstance
                         layerProcessed.add(pos);                         // 无方块 → 丢已处理
                         continue;
                     }
-                    type = canProcess(level, pos, state) ? MineTask.Type.DESTROY : null;
+                    type = isProcessableBy(level, pos, state, maid) ? MineTask.Type.DESTROY : null;
                 }
 
                 if (type == null)
                 {
+                    // 可行性不足（§8 派发侧五级检查全不成立）→ 层困难表 + 缺工具记录，不分配
                     if (!layerHardList.contains(pos))
                     {
-                        layerHardList.add(pos.immutable());              // 无法处理 → 层困难表
+                        layerHardList.add(pos.immutable());
                     }
+                    recordMissingTool(state);
                     continue;
                 }
 
@@ -499,6 +509,27 @@ public class MineInstance extends ProjectCenterInstance
         }
         if (now < settleWaitUntil) return null;
         settleWaitUntil = 0;
+        // 2s 复核后：层困难表逐条重判（可行域=仓库+在场女仆）——可处理的回池，本轮继续派发
+        if (rejudgeLayerHardList(level)) return null;
+        // 10% 终判：不可处理超过该层总格数 10% → 层暂停（等补货，10s 周期自动重判恢复）
+        int total = layerTotalCells();
+        if (layerHardList.size() > total * PAUSE_RATIO)
+        {
+            if (!layerPaused)
+            {
+                layerPaused = true;
+                LOGGER.info("[MineDebug] 层暂停：不可处理 {}/{} 超过10% 周期C{} 层#{} 缺工具:{}",
+                        layerHardList.size(), total, cycle, layerIndex, missingToolNotes);
+            }
+            return null;
+        }
+        layerPaused = false;
+        // 剩余上缴带类型困难表，推进下一层
+        for (BlockPos pos : layerHardList)
+        {
+            addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
+        }
+        layerHardList.clear();
         LOGGER.info("[MineDebug] 层结算推进 周期C{} 层#{} → 周期C{} 层#{}",
                 cycle, layerIndex, cycleLayerYs.size() > layerIndex + 1 ? cycle : cycle + 1,
                 layerIndex + 1 >= cycleLayerYs.size() ? 0 : layerIndex + 1);
@@ -520,7 +551,6 @@ public class MineInstance extends ProjectCenterInstance
         }
         // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
-        hardFailCooldown.remove(task.pos());
     }
 
     // 封存坐标：先清两列表中的旧记录（同一格重分类时移动），再按类别入表
@@ -530,19 +560,6 @@ public class MineInstance extends ProjectCenterInstance
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
         (solid ? sealedSolid : sealedAir).add(immutable);
-    }
-
-    // 不可挖掘坐标（§8 步骤8）移出当前层正常池（防重复派发空挥）+ 记层困难表（结算上缴跨层重试）
-    public void markImpossible(BlockPos pos)
-    {
-        BlockPos immutable = pos.immutable();
-        layerProcessed.add(immutable);
-        if (!layerHardList.contains(immutable))
-        {
-            layerHardList.add(immutable);
-        }
-        LOGGER.info("[MineDebug] 不可挖掘→移出当前层池+记层困难表 周期C{} 层#{} @ {}",
-                cycle, layerIndex, immutable.toShortString());
     }
 
     // 女仆放弃子任务：仅解绑，坐标回池子（§3 离场协议）
@@ -562,22 +579,19 @@ public class MineInstance extends ProjectCenterInstance
         return false;
     }
 
-    // 矿井带类型困难表取任务（§6 步骤0，2026-09-04 终版）
-    // 快照遍历 + 循环外删除（修复遍历中删除导致的 ConcurrentModificationException 崩服）
-    // 条目保留到完成才移除；判定仍不可挖掘的坐标进失败冷却，短期不再取出
+    // 矿井带类型困难表取任务（§6 步骤0 终版）
+    // 仅派出"当前可行域（请求女仆随身+仓库）下能处理"的条目——不可处理的留表，
+    // 由 10s 封存检查/层结算复核统一重判；快照遍历防 ConcurrentModificationException
     private MineTask takeHardTableTask(ServerLevel level, EntityMaid maid)
     {
         if (mineHardTasks.isEmpty()) return null;
         MineTask best = null;
         double bestDist = Double.MAX_VALUE;
         List<MineTask> satisfied = new ArrayList<>();
-        long now = level.getGameTime();
         for (MineTask task : new ArrayList<>(mineHardTasks))
         {
             BlockPos pos = task.pos();
             if (!level.isLoaded(pos)) continue;
-            Long failAt = hardFailCooldown.get(pos);
-            if (failAt != null && now < failAt) continue;
             BlockState state = level.getBlockState(pos);
             boolean solved = switch (task.type())
             {
@@ -589,8 +603,9 @@ public class MineInstance extends ProjectCenterInstance
                 satisfied.add(task);
                 continue;
             }
-            // 基岩类 DESTROY 永远无法派发，留表（不进失败冷却）
+            // 基岩类 DESTROY 永远无法派发，留表
             if (task.type() != MineTask.Type.FILL && state.getDestroySpeed(level, pos) < 0) continue;
+            if (!isProcessableBy(level, pos, state, maid)) continue;
             double dist = pos.distSqr(maid.blockPosition());
             if (dist < bestDist)
             {
@@ -599,10 +614,6 @@ public class MineInstance extends ProjectCenterInstance
             }
         }
         mineHardTasks.removeAll(satisfied);
-        for (MineTask t : satisfied)
-        {
-            hardFailCooldown.remove(t.pos());
-        }
         if (best != null)
         {
             LOGGER.info("[MineDebug] 困难表派出 {} @ {}", best.type(), best.pos().toShortString());
@@ -618,12 +629,6 @@ public class MineInstance extends ProjectCenterInstance
             if (t.pos().equals(task.pos()) && t.type() == task.type()) return;
         }
         mineHardTasks.add(task);
-    }
-
-    // 行为侧判定仍不可挖掘 → 失败冷却（同坐标短期内不再从表里取出）
-    public void failHardTask(ServerLevel level, MineTask task)
-    {
-        hardFailCooldown.put(task.pos(), level.getGameTime() + HARD_FAIL_COOLDOWN_TICKS);
     }
 
     // 光源阶段（§10/§6 步骤2）：层内未放的光源位，有灯 → SETLIGHT，无灯 → FETCH_LIGHT
@@ -677,11 +682,97 @@ public class MineInstance extends ProjectCenterInstance
         return blockItem.getBlock().defaultBlockState().getLightEmission() > 0;
     }
 
-    // 难度判定（§8，2026-09-04 终版：派发侧降级为基岩类拦截——工具可行性判定移到行为侧七步流程，
-    // 凑不出工具的坐标由行为侧进带类型困难表，补货后可重试）
-    private static boolean canProcess(ServerLevel level, BlockPos pos, BlockState state)
+    // ===================== 可行性判定（§8 终版：先检查再分配） =====================
+
+    // 派发侧五级检查（对请求女仆）：基岩类/全不成立 → false（进层困难表，不分配）；
+    // ②自身推荐 ③仓库推荐 ④非必须空手 ⑤自身必要 ⑥仓库必要 → 任一成立 → true（可分配）
+    private boolean isProcessableBy(ServerLevel level, BlockPos pos, BlockState state, EntityMaid maid)
     {
-        return state.getDestroySpeed(level, pos) >= 0;
+        if (state.getDestroySpeed(level, pos) < 0) return false;
+        if (invHasRecommended(maid, state) || warehouseHasRecommended(state)) return true;
+        if (!state.requiresCorrectToolForDrops()) return true;
+        if (invHasNecessary(maid, state) || warehouseHasNecessary(state)) return true;
+        return false;
+    }
+
+    // 复核可行域（层困难表重判用）：仓库 + 中心在场女仆的随身工具
+    private boolean isProcessableByContext(ServerLevel level, BlockPos pos, BlockState state, List<EntityMaid> maids)
+    {
+        if (state.getDestroySpeed(level, pos) < 0) return false;
+        if (warehouseHasRecommended(state)) return true;
+        if (!state.requiresCorrectToolForDrops()) return true;
+        if (warehouseHasNecessary(state)) return true;
+        for (EntityMaid maid : maids)
+        {
+            if (invHasRecommended(maid, state) || invHasNecessary(maid, state)) return true;
+        }
+        return false;
+    }
+
+    // 自身（主手+背包）是否存在推荐工具（类型匹配且能正确掉落）
+    private static boolean invHasRecommended(EntityMaid maid, BlockState state)
+    {
+        if (matchesType(maid.getMainHandItem(), state) && maid.getMainHandItem().isCorrectToolForDrops(state)) return true;
+        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        for (int i = 0; i < inv.size(); i++)
+        {
+            ItemResource res = inv.getResource(i);
+            if (res.isEmpty()) continue;
+            ItemStack probe = res.toStack(1);
+            if (matchesType(probe, state) && probe.isCorrectToolForDrops(state)) return true;
+        }
+        return false;
+    }
+
+    // 自身（主手+背包）是否存在必要工具（能正确掉落即可，不限类型）
+    private static boolean invHasNecessary(EntityMaid maid, BlockState state)
+    {
+        if (maid.getMainHandItem().isCorrectToolForDrops(state)) return true;
+        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        for (int i = 0; i < inv.size(); i++)
+        {
+            ItemResource res = inv.getResource(i);
+            if (res.isEmpty()) continue;
+            if (res.toStack(1).isCorrectToolForDrops(state)) return true;
+        }
+        return false;
+    }
+
+    private boolean warehouseHasRecommended(BlockState state)
+    {
+        return countWarehouse(stack -> matchesType(stack, state)) > 0;
+    }
+
+    private boolean warehouseHasNecessary(BlockState state)
+    {
+        return countWarehouse(stack -> !stack.isEmpty() && stack.isCorrectToolForDrops(state)) > 0;
+    }
+
+    // 方块期望的工具类型（按原版"可挖掘"标签）：镐/锹/斧/锄
+    private static boolean matchesType(ItemStack stack, BlockState state)
+    {
+        return (state.is(BlockTags.MINEABLE_WITH_PICKAXE) && stack.is(ItemTags.PICKAXES))
+                || (state.is(BlockTags.MINEABLE_WITH_SHOVEL) && stack.is(ItemTags.SHOVELS))
+                || (state.is(BlockTags.MINEABLE_WITH_AXE) && stack.is(ItemTags.AXES))
+                || (state.is(BlockTags.MINEABLE_WITH_HOE) && stack.is(ItemTags.HOES));
+    }
+
+    // 缺工具数据记录（UI 阶段展示用，当前先持久化字符串描述，去重+上限16条）
+    private void recordMissingTool(BlockState state)
+    {
+        String need;
+        if (state.is(BlockTags.MINEABLE_WITH_PICKAXE)) need = "镐";
+        else if (state.is(BlockTags.MINEABLE_WITH_SHOVEL)) need = "锹";
+        else if (state.is(BlockTags.MINEABLE_WITH_AXE)) need = "斧";
+        else if (state.is(BlockTags.MINEABLE_WITH_HOE)) need = "锄";
+        else need = "任意工具";
+        if (state.requiresCorrectToolForDrops()) need += "（需正确工具才掉落）";
+        String note = need + " — 示例: " + state.getBlock().getName().getString();
+        if (!missingToolNotes.contains(note))
+        {
+            missingToolNotes.add(note);
+            if (missingToolNotes.size() > 16) missingToolNotes.remove(0);
+        }
     }
 
     // 垫脚方块判定（§5）：草方块 + 泥土/木板/圆石/石头（2026-09-04 拍板：草方块显式计入，
@@ -739,6 +830,55 @@ public class MineInstance extends ProjectCenterInstance
         if (now - lastRefreshGameTime < REFRESH_INTERVAL_TICKS) return;
         lastRefreshGameTime = now;
         refreshSealedLists(level);
+        if (layerPaused) tryResumeLayer(level);
+    }
+
+    // 暂停层 10s 重判：可处理比例回落到阈值内 → 自动恢复（工具来源=仓库+在场女仆）
+    private void tryResumeLayer(ServerLevel level)
+    {
+        rejudgeLayerHardList(level);
+        int total = layerTotalCells();
+        if (layerHardList.size() <= total * PAUSE_RATIO)
+        {
+            layerPaused = false;
+            missingToolNotes.clear();
+            LOGGER.info("[MineDebug] 层暂停解除 周期C{} 层#{} 困难表残留{}",
+                    cycle, layerIndex, layerHardList.size());
+        }
+    }
+
+    // 层困难表重判（可行域=仓库+在场女仆随身工具）：可处理的移出层困难表回池派发
+    // 返回 true = 本轮有条目恢复可处理
+    private boolean rejudgeLayerHardList(ServerLevel level)
+    {
+        if (layerHardList.isEmpty()) return false;
+        List<EntityMaid> maids = new ArrayList<>();
+        for (UUID uuid : getMemberIds())
+        {
+            if (level.getEntity(uuid) instanceof EntityMaid m) maids.add(m);
+        }
+        List<BlockPos> recovered = new ArrayList<>();
+        for (BlockPos pos : layerHardList)
+        {
+            if (!level.isLoaded(pos)) continue;
+            if (isProcessableByContext(level, pos, level.getBlockState(pos), maids))
+            {
+                recovered.add(pos);
+            }
+        }
+        layerHardList.removeAll(recovered);
+        if (!recovered.isEmpty())
+        {
+            LOGGER.info("[MineDebug] 层困难表复核：{} 个坐标恢复可处理", recovered.size());
+        }
+        return !recovered.isEmpty();
+    }
+
+    // 该层扫描区域总格数（(L+2)×(W+2)），10% 暂停阈值的分母
+    private int layerTotalCells()
+    {
+        SpiralMinePlanner p = planner();
+        return (p.getMaxX() - p.getMinX() + 3) * (p.getMaxZ() - p.getMinZ() + 3);
     }
 
     // 检查封存列表：空置位有方块 → 困难表 DESTROY；实体位为空 → 困难表 FILL
@@ -789,6 +929,11 @@ public class MineInstance extends ProjectCenterInstance
         return exhausted;
     }
 
+    public boolean isLayerPaused()
+    {
+        return layerPaused;
+    }
+
     public void markExhausted()
     {
         this.exhausted = true;
@@ -814,9 +959,10 @@ public class MineInstance extends ProjectCenterInstance
         int y = cycleLayerYs.get(layerIndex);
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
-        return String.format("周期C%d 层#%d/%d Y=%d(限%d) 保留%d 光源%d 子任务%d 层困难%d | 困难表%d 空置封存%d 实体封存%d",
+        return String.format("周期C%d 层#%d/%d Y=%d(限%d) 保留%d 光源%d 子任务%d 层困难%d %s| 困难表%d 空置封存%d 实体封存%d",
                 cycle, layerIndex, cycleLayerYs.size(), y, depthBottomY(),
                 keeps.size(), lights.size(), layerSubtasks.size(), layerHardList.size(),
+                layerPaused ? "[层暂停] " : "",
                 mineHardTasks.size(), sealedAir.size(), sealedSolid.size());
     }
 }

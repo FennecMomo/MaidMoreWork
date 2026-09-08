@@ -24,11 +24,43 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 //
 // 交互：左键方块 → 设角点1；右键方块 → 设角点2（点矿井方块则显示矿井信息）；
 //       右键空气（两角点齐全）→ 弹确认窗 → 确认后 createMine + 放置矿井中心方块
-// 两角点存标记工具 CustomData（见 MineCenterMarkerItem），确认/取消命令带角点参数，
-// 服务端无状态校验（不依赖任何内存 pending 结构）
+// 两角点为**临时会话缓存**（2026-09-04 拍板：按玩家 UUID 记内存，重登即失效，
+// 玩家重登必然重新框选），确认命令带角点参数，服务端无状态校验
 @EventBusSubscriber(modid = com.fennecmomo.maidmorework.MaidMoreWork.MODID)
 public class MineCenterMarkerEventHandler
 {
+    // 角点会话缓存（按玩家 UUID；[0]=角点1 [1]=角点2）
+    private static final java.util.Map<java.util.UUID, BlockPos[]> PENDING_CORNERS = new java.util.HashMap<>();
+
+    private static BlockPos getCorner(Player player, int index)
+    {
+        BlockPos[] corners = PENDING_CORNERS.get(player.getUUID());
+        return corners == null ? null : corners[index];
+    }
+
+    private static boolean hasCorners(Player player)
+    {
+        BlockPos[] corners = PENDING_CORNERS.get(player.getUUID());
+        return corners != null && corners[0] != null && corners[1] != null;
+    }
+
+    private static void setCornerData(Player player, int index, BlockPos pos)
+    {
+        BlockPos[] corners = PENDING_CORNERS.computeIfAbsent(player.getUUID(), k -> new BlockPos[2]);
+        corners[index] = pos.immutable();
+    }
+
+    private static void clearCorners(Player player)
+    {
+        PENDING_CORNERS.remove(player.getUUID());
+    }
+
+    // 取消创建：清空该玩家的角点缓存（供命令调用）
+    static void clearPendingCorners(Player player)
+    {
+        clearCorners(player);
+    }
+
     // ===================== 事件入口 =====================
 
     // 左键方块：设角点1
@@ -68,13 +100,13 @@ public class MineCenterMarkerEventHandler
         ItemStack stack = player.getItemInHand(event.getHand());
         if (!(stack.getItem() instanceof MineCenterMarkerItem)) return;
         if (player.level().isClientSide()) return;
-        if (!MineCenterMarkerItem.hasCorner1(stack) || !MineCenterMarkerItem.hasCorner2(stack)) return;
+        if (!hasCorners(player)) return;
 
         if (player instanceof ServerPlayer sp)
         {
-            openConfirmScreen(sp, stack,
-                    MineCenterMarkerItem.getCorner1(stack),
-                    MineCenterMarkerItem.getCorner2(stack));
+            openConfirmScreen(sp,
+                    getCorner(player, 0),
+                    getCorner(player, 1));
         }
     }
 
@@ -82,17 +114,16 @@ public class MineCenterMarkerEventHandler
 
     private static void setCorner(Player player, BlockPos pos, boolean isCorner1)
     {
-        ItemStack stack = player.getMainHandItem();
         Level level = player.level();
 
         if (isCorner1)
         {
-            MineCenterMarkerItem.setCorner1(stack, pos);
+            setCornerData(player, 0, pos);
             player.sendSystemMessage(Component.literal("§a角1已设置: " + pos.toShortString()));
         }
         else
         {
-            MineCenterMarkerItem.setCorner2(stack, pos);
+            setCornerData(player, 1, pos);
             player.sendSystemMessage(Component.literal("§a角2已设置: " + pos.toShortString()
                     + "§7（右键空气打开确认窗）"));
         }
@@ -153,7 +184,7 @@ public class MineCenterMarkerEventHandler
                 oddSide(Math.abs(c1.getZ() - c2.getZ()))));
     }
 
-    private static void openConfirmScreen(ServerPlayer player, ItemStack marker,
+    private static void openConfirmScreen(ServerPlayer player,
                                           BlockPos c1, BlockPos c2)
     {
         ShaftPlan plan = computeShaft(c1, c2);
@@ -240,7 +271,7 @@ public class MineCenterMarkerEventHandler
         }
         ProjectCenterManager.createMine(level, id, owner, center, radius, 0, shaftNW, shaftSE);
 
-        MineCenterMarkerItem.clearCorners(marker);
+        clearCorners(player);
 
         player.sendSystemMessage(Component.literal(
                 "§a矿井已创建！中心: " + center.toShortString()

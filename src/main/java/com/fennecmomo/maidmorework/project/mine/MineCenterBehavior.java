@@ -81,14 +81,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         NONE, SCAFFOLD, TOOL
     }
 
-    // 取工具支线规格（§8 七步流程：推荐/必要两级 + 方块的类型标签需求）
-    private record ToolFetchSpec(BlockPos taskPos, boolean recommended,
-                                 boolean pickaxe, boolean shovel, boolean axe, boolean hoe) {}
-
-    private enum ToolResolution
-    {
-        READY, FETCH, IMPOSSIBLE
-    }
+    // 取工具支线规格（§8 派发侧已确认仓库有货，这里只管去取）
+    private record ToolFetchSpec(BlockPos taskPos, boolean recommended) {}
 
     // 自身工具候选（主手 slot<0，背包槽位≥0）
     private record ToolCandidate(int slot, ItemResource res, ItemStack stack) {}
@@ -183,6 +177,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (fetchKind == FetchKind.TOOL)
         {
             handleToolFetch(level, maid, mine);
+            return;
+        }
+
+        // 层暂停（2026-09-04 拍板）：无可领任务时到工程中心旁等待，恢复后自动继续
+        if (mine.isLayerPaused() && currentTask == null)
+        {
+            if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
             return;
         }
 
@@ -466,15 +467,16 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             BlockState targetState = level.getBlockState(toolFetchSpec.taskPos());
             java.util.function.Predicate<ItemStack> predicate = toolFetchSpec.recommended()
-                    ? stack -> matchesType(stack, toolFetchSpec.pickaxe(), toolFetchSpec.shovel(),
-                            toolFetchSpec.axe(), toolFetchSpec.hoe())
+                    ? stack -> matchesType(stack, targetState)
                     : stack -> !stack.isEmpty() && stack.isCorrectToolForDrops(targetState);
             List<ItemStack> taken = mine.takeFromWarehouse(predicate, 1);
             if (taken.isEmpty())
             {
-                showBubbleWithCooldown(maid, toolFetchSpec.recommended() ? "仓库缺趁手工具" : "仓库缺可用工具",
-                        PICKAXE_KEY);
-                waitTicks = WAIT_TICKS;
+                // 仓库竞态（派发时有、取时没了）→ 释放重派，派发侧可行性检查会把它送进层困难表
+                LOGGER.info("[MineDebug] 取工具竞态落空 @ {}", toolFetchSpec.taskPos().toShortString());
+                releaseCurrent(mine, maid);
+                toolFetchSpec = null;
+                fetchKind = FetchKind.NONE;
                 return;
             }
             for (ItemStack stack : taken)
@@ -485,7 +487,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     Block.popResource(level, mine.getBlockPos(), leftover);
                 }
             }
-            equipPickaxe(maid);     // 先粗装，下次挖掘前 resolveTool 精调
+            equipPickaxe(maid);     // 先粗装，下次挖掘前装备流程精调
             toolFetchSpec = null;
             fetchKind = FetchKind.NONE;
             return;
@@ -493,91 +495,66 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         navigate(level, maid, mine.getBlockPos());
     }
 
-    // ===================== §8 七步工具决策流程（2026-09-04 拍板终版） =====================
+    // ===================== §8 装备流程（2026-09-04 终版：可行性已在派发侧确认） =====================
 
-    //   1. 判定类型（可挖掘标签：镐/锹/斧/锄）与是否必须正确工具掉落
-    //   2. 推荐工具 = 类型匹配且能正确掉落（候选取对目标速度最高）
-    //   3. 自身（主手+背包）推荐 → 装备开挖
-    //   4. 仓库推荐 → 取货支线（FetchKind.TOOL）
-    //   5. 非必须工具 → 直接空手挖（主手收回背包）
-    //   6. 自身必要工具（能正确掉落即可，不限类型）→ 装备
-    //   7. 仓库必要工具 → 取货支线
-    //   都凑不出 → 不可挖掘 → 进困难表 + 失败冷却（补货后可重试）
-    private ToolResolution resolveTool(ServerLevel level, EntityMaid maid, MineInstance mine,
-                                       MineTask task, BlockState state)
+    //   顺序：自身推荐 → 装备开挖 | 仓库推荐 → 取货支线 | 非必须 → 空手 | 自身必要 → 装备 | 仓库必要 → 取货支线
+    //   （五级可行性在派发侧已确认任一成立，本流程只负责"用上合适的工具"，不存在不可挖掘出口）
+    // 返回 true = 可以开挖；false = 已设取货支线（任务保持绑定，fetchKind=TOOL 接管）
+    private boolean equipFor(ServerLevel level, EntityMaid maid, MineInstance mine, BlockPos pos, BlockState state)
     {
-        boolean needsPickaxe = state.is(BlockTags.MINEABLE_WITH_PICKAXE);
-        boolean needsShovel = state.is(BlockTags.MINEABLE_WITH_SHOVEL);
-        boolean needsAxe = state.is(BlockTags.MINEABLE_WITH_AXE);
-        boolean needsHoe = state.is(BlockTags.MINEABLE_WITH_HOE);
-        boolean required = state.requiresCorrectToolForDrops();
-
-        // 3. 自身推荐
-        ToolCandidate best = bestToolInInv(maid, state, needsPickaxe, needsShovel, needsAxe, needsHoe, true);
+        // 自身推荐
+        ToolCandidate best = bestToolInInv(maid, state, true);
         if (best != null)
         {
             equipCandidate(maid, best);
-            LOGGER.info("[MineDebug] 工具流程(步骤3 自身推荐) 装备 {} @ {}",
+            LOGGER.info("[MineDebug] 装备流程(自身推荐) 装备 {} @ {}",
                     best.stack().getItem(), state.getBlock());
-            return ToolResolution.READY;
+            return true;
         }
-        // 4. 仓库推荐
-        if (mine.countWarehouse(stack -> matchesType(stack, needsPickaxe, needsShovel, needsAxe, needsHoe)) > 0)
+        // 仓库推荐
+        if (mine.countWarehouse(stack -> matchesType(stack, state)) > 0)
         {
-            toolFetchSpec = new ToolFetchSpec(task.pos(), true, needsPickaxe, needsShovel, needsAxe, needsHoe);
+            toolFetchSpec = new ToolFetchSpec(pos, true);
             fetchKind = FetchKind.TOOL;
-            releaseCurrent(mine, maid);
-            LOGGER.info("[MineDebug] 工具流程(步骤4 仓库推荐) 去仓库取 {} @ {}",
-                    state.getBlock(), task.pos().toShortString());
-            return ToolResolution.FETCH;
+            return false;
         }
-        // 5. 非必须 → 空手挖（主手收回背包）
-        if (!required)
+        // 非必须 → 空手挖（主手收回背包）
+        if (!state.requiresCorrectToolForDrops())
         {
             stashMainHand(maid);
-            LOGGER.info("[MineDebug] 工具流程(步骤5 非必须空手) {} @ {}",
-                    state.getBlock(), task.pos().toShortString());
-            return ToolResolution.READY;
+            LOGGER.info("[MineDebug] 装备流程(非必须空手) {} @ {}", state.getBlock(), pos.toShortString());
+            return true;
         }
-        // 6. 自身必要（能正确掉落即可，不限类型）
-        best = bestToolInInv(maid, state, false, false, false, false, false);
+        // 自身必要（能正确掉落即可，不限类型）
+        best = bestToolInInv(maid, state, false);
         if (best != null)
         {
             equipCandidate(maid, best);
-            LOGGER.info("[MineDebug] 工具流程(步骤6 自身必要) 装备 {} @ {}",
+            LOGGER.info("[MineDebug] 装备流程(自身必要) 装备 {} @ {}",
                     best.stack().getItem(), state.getBlock());
-            return ToolResolution.READY;
+            return true;
         }
-        // 7. 仓库必要
+        // 仓库必要
         if (mine.countWarehouse(stack -> !stack.isEmpty() && stack.isCorrectToolForDrops(state)) > 0)
         {
-            toolFetchSpec = new ToolFetchSpec(task.pos(), false, false, false, false, false);
+            toolFetchSpec = new ToolFetchSpec(pos, false);
             fetchKind = FetchKind.TOOL;
-            releaseCurrent(mine, maid);
-            LOGGER.info("[MineDebug] 工具流程(步骤7 仓库必要) 去仓库取 @ {}",
-                    task.pos().toShortString());
-            return ToolResolution.FETCH;
+            return false;
         }
-        // 8. 不可挖掘 → 移出当前层池（防重复派发空挥）+ 困难表 + 失败冷却
-        LOGGER.info("[MineDebug] 工具流程(步骤8 不可挖掘) {} required={} @ {}",
-                state.getBlock(), required, task.pos().toShortString());
-        mine.markImpossible(task.pos());
-        mine.addHardTask(new MineTask(task.pos(), task.type()));
-        mine.failHardTask(level, task);
+        // 理论不可达（派发侧已确认可行）——兜底：释放重派
+        LOGGER.info("[MineDebug] 装备流程兜底触发（仓库竞态）{}", state.getBlock());
         releaseCurrent(mine, maid);
-        return ToolResolution.IMPOSSIBLE;
+        return false;
     }
 
     // 自身（主手+背包）中满足判定的最优工具（对目标方块速度最高）
     // typeMatchedOnly=true → 类型标签匹配且能正确掉落（推荐级）；false → 能正确掉落即可（必要级）
-    private ToolCandidate bestToolInInv(EntityMaid maid, BlockState state,
-                                        boolean needPickaxe, boolean needShovel, boolean needAxe, boolean needHoe,
-                                        boolean typeMatchedOnly)
+    private ToolCandidate bestToolInInv(EntityMaid maid, BlockState state, boolean typeMatchedOnly)
     {
         ToolCandidate best = null;
         float bestSpeed = -1f;
         ItemStack main = maid.getMainHandItem();
-        if (matchesTool(main, state, needPickaxe, needShovel, needAxe, needHoe, typeMatchedOnly))
+        if (matchesTool(main, state, typeMatchedOnly))
         {
             bestSpeed = main.getDestroySpeed(state);
             best = new ToolCandidate(-1, null, main);
@@ -588,7 +565,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             ItemResource res = inv.getResource(i);
             if (res.isEmpty()) continue;
             ItemStack probe = res.toStack(1);
-            if (!matchesTool(probe, state, needPickaxe, needShovel, needAxe, needHoe, typeMatchedOnly)) continue;
+            if (!matchesTool(probe, state, typeMatchedOnly)) continue;
             float speed = probe.getDestroySpeed(state);
             if (speed > bestSpeed)
             {
@@ -599,22 +576,20 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return best;
     }
 
-    private static boolean matchesTool(ItemStack stack, BlockState state,
-                                       boolean needPickaxe, boolean needShovel, boolean needAxe, boolean needHoe,
-                                       boolean typeMatchedOnly)
+    private static boolean matchesTool(ItemStack stack, BlockState state, boolean typeMatchedOnly)
     {
         if (stack.isEmpty()) return false;
-        if (typeMatchedOnly && !matchesType(stack, needPickaxe, needShovel, needAxe, needHoe)) return false;
+        if (typeMatchedOnly && !matchesType(stack, state)) return false;
         return stack.isCorrectToolForDrops(state);
     }
 
-    private static boolean matchesType(ItemStack stack, boolean needPickaxe, boolean needShovel,
-                                       boolean needAxe, boolean needHoe)
+    // 方块期望的工具类型（按原版"可挖掘"标签）：镐/锹/斧/锄
+    private static boolean matchesType(ItemStack stack, BlockState state)
     {
-        return (needPickaxe && stack.is(ItemTags.PICKAXES))
-                || (needShovel && stack.is(ItemTags.SHOVELS))
-                || (needAxe && stack.is(ItemTags.AXES))
-                || (needHoe && stack.is(ItemTags.HOES));
+        return (state.is(BlockTags.MINEABLE_WITH_PICKAXE) && stack.is(ItemTags.PICKAXES))
+                || (state.is(BlockTags.MINEABLE_WITH_SHOVEL) && stack.is(ItemTags.SHOVELS))
+                || (state.is(BlockTags.MINEABLE_WITH_AXE) && stack.is(ItemTags.AXES))
+                || (state.is(BlockTags.MINEABLE_WITH_HOE) && stack.is(ItemTags.HOES));
     }
 
     // 装备候选工具：主手已是最优则不动；背包工具换到主手（旧主手放回原槽，Transaction 原子）
@@ -919,7 +894,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     // 真挖掘（2026-09-04 拍板）：原版公式逐 tick 推进，速度自然关联工具与方块
     //   每 tick 进度 += 工具速度 ÷ 方块硬度 ÷ (可正确掉落 ? 30 : 100)
     //   破坏裂纹实时渲染（destroyBlockProgress 0~9），完成时扣 1 点耐久 + 收集掉落物
-    //   新目标第一 tick 先跑 §8 七步工具决策流程（未就绪/不可挖掘则不动手）
+    //   新目标第一 tick 先跑装备流程（未就绪则不动手，取货支线接管）
     // 返回 true = 挖掘完成（已破坏并收集）
     private boolean progressDig(ServerLevel level, EntityMaid maid, MineInstance mine, MineTask task,
                                 BlockPos pos, BlockState state)
@@ -931,28 +906,17 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
         if (!pos.equals(digPos))
         {
-            switch (resolveTool(level, maid, mine, task, state))
+            // 可行性已在派发侧确认，这里只跑装备流程（自身/仓库取用）
+            if (!equipFor(level, maid, mine, pos, state))
             {
-                case READY ->
-                {
-                    digPos = pos;
-                    digProgress = 0f;
-                }
-                case FETCH ->
-                {
-                    digPos = null;
-                    digProgress = 0f;
-                    return false;       // 已设取货支线并释放任务
-                }
-                case IMPOSSIBLE ->
-                {
-                    digPos = null;
-                    digProgress = 0f;
-                    return false;       // 已移出层池+进困难表并释放任务
-                }
+                digPos = null;
+                digProgress = 0f;
+                return false;       // 已设取货支线（任务保持绑定）
             }
+            digPos = pos;
+            digProgress = 0f;
         }
-        // 就绪后才挥手/累计进度（不可挖掘的坐标不会出现挥空手）
+        // 就绪后才挥手/累计进度
         maid.swing(maid.getUsedItemHand());
         ItemStack tool = maid.getMainHandItem();
         float speed = tool.getDestroySpeed(state);
