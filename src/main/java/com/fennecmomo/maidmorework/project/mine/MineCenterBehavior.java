@@ -816,35 +816,31 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 破坏后下方安全检查：实心→安全；源流体→清掉+流体瓶；基岩→不管（派发侧困难表处理）；
-    // 空洞→就地垫脚（无垫脚则作罢，属于下一层任务池）
+    // 破坏后下方安全检查（2026-09-04 精简：不再自动垫脚）
+    //   下方垫脚是"挖4放4"瀑布的根源——下方格属于下层隧道/待挖区域，自动垫会污染封存
+    //   并被下层重复挖掘（挖了白挖）；下层自会按规划处理该格，楼梯是官方通行路径。
+    //   保留：源流体 → 清除 + 流体瓶（§9）；基岩 → 跳过
     private void checkBelowSafety(ServerLevel level, EntityMaid maid, BlockPos brokenPos)
     {
         BlockPos below = brokenPos.below();
         BlockState belowState = level.getBlockState(below);
-        if (belowState.isSolid()) return;
-        if (isFluidSource(belowState))
+        if (!isFluidSource(belowState)) return;
+        Fluid fluid = getFluidFromBlock(belowState);
+        level.setBlock(below, Blocks.AIR.defaultBlockState(), 3);
+        if (fluid != null)
         {
-            Fluid fluid = getFluidFromBlock(belowState);
-            level.setBlock(below, Blocks.AIR.defaultBlockState(), 3);
-            if (fluid != null)
+            ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
+            if (fluidKey != null)
             {
-                ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
-                if (fluidKey != null)
+                ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
+                FluidBottleItem.setFluid(bottle, fluidKey);
+                ItemStack leftover = addToInventory(maid, bottle);
+                if (!leftover.isEmpty())
                 {
-                    ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
-                    FluidBottleItem.setFluid(bottle, fluidKey);
-                    ItemStack leftover = addToInventory(maid, bottle);
-                    if (!leftover.isEmpty())
-                    {
-                        Block.popResource(level, brokenPos, leftover);
-                    }
+                    Block.popResource(level, brokenPos, leftover);
                 }
             }
-            return;
         }
-        if (belowState.getDestroySpeed(level, below) < 0) return;
-        tryPlaceScaffold(level, maid, below);
     }
 
     // 放置垫脚方块（从背包找第一个垫脚，Transaction 扣减）
@@ -900,7 +896,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 找水平方向上的实体墙（火把贴墙面），返回"从墙指向目标格"的朝向
+    // 找水平方向上的实体墙（火把贴墙面），返回方向供 WallTorchBlock.FACING 使用
+    // （2026-09-04 修正：原版 FACING 语义 = 从火把格指向支撑墙——原版 canSurvive 以
+    //   pos.relative(FACING) 校验墙面，先前返回反方向导致火把视觉偏一格且四面镜像）
     private static Direction findWallFace(ServerLevel level, BlockPos target)
     {
         for (Direction d : new Direction[]{Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST})
@@ -909,7 +907,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             BlockState state = level.getBlockState(neighbor);
             if (!state.isAir() && state.isSolid())
             {
-                return d.getOpposite();
+                return d;
             }
         }
         return null;

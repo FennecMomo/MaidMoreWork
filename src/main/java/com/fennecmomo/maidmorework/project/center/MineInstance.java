@@ -816,6 +816,7 @@ public class MineInstance extends ProjectCenterInstance
     // 周期耗尽进下一周期；新层低于深度限制时在下次 requestWork 头部判为已挖尽（D2）
     private void advanceLayer(ServerLevel level)
     {
+        reconcileLayerSeals();
         for (BlockPos pos : layerHardList)
         {
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
@@ -834,6 +835,27 @@ public class MineInstance extends ProjectCenterInstance
             cycleKeeps.clear();
             cycleLights.clear();
             ensureCycleComputed(level);
+        }
+    }
+
+    // 结算封存对齐（2026-09-04 拍板）：以当前周期规划器的保留区为真相，
+    // 重核本层区域所有格子的封存类别（灯位→光源封存、保留格→实体封存、非保留格→空置封存），
+    // 修正历史误分类（如楼梯格被标"应空"导致 10s 检查误拆楼梯）
+    private void reconcileLayerSeals()
+    {
+        SpiralMinePlanner p = planner();
+        int y = cycleLayerYs.get(layerIndex);
+        Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
+        Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
+        for (int x = p.getMinX() - 1; x <= p.getMaxX() + 1; x++)
+        {
+            for (int z = p.getMinZ() - 1; z <= p.getMaxZ() + 1; z++)
+            {
+                BlockPos pos = new BlockPos(x, y, z);
+                if (lights.contains(pos)) sealAs(pos, sealedLights);
+                else if (keeps.contains(pos)) sealAs(pos, sealedSolid);
+                else sealAs(pos, sealedAir);
+            }
         }
     }
 
