@@ -782,7 +782,8 @@ public class ProjectCenterInstance
                 IProjectType type = ProjectTypeRegistry.get(projectTypeId);
                 String typeName = type != null ? type.displayName().getString() : projectTypeId;
                 var info = new ProjectCenterInfoPayload(
-                        getBlockPos(), typeName, managedProjects.size(), savedHomes.size(), getRadius(), getName());
+                        getBlockPos(), typeName, managedProjects.size(), savedHomes.size(), getRadius(), getName(),
+                        infoMissingTools());
                 PacketDistributor.sendToAllPlayers(info);
             }
         }
@@ -797,6 +798,12 @@ public class ProjectCenterInstance
     public String kind()
     {
         return KIND_CENTER;
+    }
+
+    // 信息包附加数据（子类覆写：矿井带缺工具列表）
+    protected List<String> infoMissingTools()
+    {
+        return List.of();
     }
 
     public UUID getId() { return id; }

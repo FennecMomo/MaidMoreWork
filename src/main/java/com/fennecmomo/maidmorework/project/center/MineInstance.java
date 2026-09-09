@@ -402,8 +402,22 @@ public class MineInstance extends ProjectCenterInstance
     //   返回 null = 暂无可派任务（等待/空闲/已挖尽）
     public MineTask requestWork(EntityMaid maid)
     {
-        if (exhausted) return null;
         if (!(maid.level() instanceof ServerLevel level)) return null;
+
+        // 挖尽 = 待机（2026-09-04 拍板）：不推进新层，但封存检查（10s 周期）发现的维护任务
+        // （落入矿道的沙子/被打掉的灯等）仍会派发处理，处理完回待机
+        if (exhausted)
+        {
+            MineTask maintenance = takeHardTableTask(level, maid);
+            if (maintenance != null)
+            {
+                layerSubtasks.put(maid.getUUID(), maintenance);
+                LOGGER.info("[MineDebug] 女仆={} 派发 {}(挖尽维护) @ {}", shortId(maid.getUUID()),
+                        maintenance.type(), maintenance.pos().toShortString());
+                return maintenance;
+            }
+            return null;
+        }
 
         ensureCycleComputed(level);
         if (layerIndex >= cycleLayerYs.size()) return null;
@@ -974,6 +988,30 @@ public class MineInstance extends ProjectCenterInstance
     public boolean isLayerPaused()
     {
         return layerPaused;
+    }
+
+    // 信息包附加数据（缺工具列表，中心面板显示"缺少：xxx"）
+    @Override
+    protected List<String> infoMissingTools()
+    {
+        return List.copyOf(missingToolNotes);
+    }
+
+    // 灯位支撑方向推算（2026-09-04 拍板）：灯位必靠某一面墙的内侧 1~2 格，
+    // 支撑方向 = 四向中"到边界最短"的外侧（北墙→-z、南墙→+z、西墙→-x、东墙→+x）
+    // 例：井宽 11，北边灯1 (cx, h, minZ+2) → 支撑 (cx, h, minZ+1)，方向 -z
+    public net.minecraft.core.Direction supportDirection(BlockPos pos)
+    {
+        SpiralMinePlanner p = planner();
+        int distWest = pos.getX() - p.getMinX();
+        int distEast = p.getMaxX() - pos.getX();
+        int distNorth = pos.getZ() - p.getMinZ();
+        int distSouth = p.getMaxZ() - pos.getZ();
+        int min = Math.min(Math.min(distWest, distEast), Math.min(distNorth, distSouth));
+        if (min == distNorth) return net.minecraft.core.Direction.NORTH;
+        if (min == distSouth) return net.minecraft.core.Direction.SOUTH;
+        if (min == distWest) return net.minecraft.core.Direction.WEST;
+        return net.minecraft.core.Direction.EAST;
     }
 
     public void markExhausted()

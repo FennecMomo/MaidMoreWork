@@ -69,7 +69,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private boolean reachedTarget = false;
     private int navFailCount = 0;
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
-    private boolean finished = false;       // 矿井挖尽/失联 → 结束行为
+    private boolean finished = false;       // 矿井失联 → 结束行为（挖尽为待机，不结束）
+    private boolean exhaustedLogged = false; // 挖尽待机日志与放权只执行一次
     private boolean pendingDeposit = false; // B3：背包满（产物入包后检测）→ 待去仓库存放
     private float digProgress = 0f;         // 真挖掘进度（2026-09-04 拍板：原版公式逐 tick 累计）
     private BlockPos digPos = null;         // 正在挖的坐标（换目标即重置进度与裂纹）
@@ -155,6 +156,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         navFailCount = 0;
         waitTicks = 0;
         finished = false;
+        exhaustedLogged = false;
         pendingDeposit = false;
         digProgress = 0f;
         digPos = null;
@@ -165,10 +167,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     protected void tick(ServerLevel level, EntityMaid maid, long time)
     {
         MineInstance mine = mineById(level);
-        if (mine == null || mine.isExhausted())
+        if (mine == null)
         {
             finished = true;
-            logTransition(maid, "结束", mine == null ? "矿井失联" : "矿井已挖尽");
+            logTransition(maid, "结束", "矿井失联");
             return;
         }
 
@@ -206,6 +208,19 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             logTransition(maid, "暂停等待", "层不可处理方块超过10%，等待补货");
             if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
             return;
+        }
+
+        // 挖尽 = 待机（2026-09-04 拍板）：保留成员身份不轰出中心，走到矿井旁放宽移动范围闲逛；
+        // 封存检查（10s 周期）发现的维护任务（落入矿道的沙子/被打掉的灯）仍会派发处理
+        if (mine.isExhausted() && currentTask == null)
+        {
+            if (!exhaustedLogged)
+            {
+                logTransition(maid, "挖尽待机", "保留成员身份，放宽移动范围");
+                maid.setHomeTo(mine.getBlockPos(), 32);
+                exhaustedLogged = true;
+            }
+            if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
         }
 
         // 领任务
@@ -329,7 +344,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     progressDig(level, maid, mine, task, target, state);
                     return;
                 }
-                if (tryPlaceLight(level, maid, target))
+                if (tryPlaceLight(level, maid, mine, target))
                 {
                     finishTask(mine, maid, task);
                 }
@@ -570,9 +585,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             fetchKind = FetchKind.TOOL;
             return false;
         }
-        // 五级全空（SETLIGHT 先挖段等未预检路径 / 仓库竞态）→ 直接上报困难表 + 缺工具记录
+        // 五级全空（SETLIGHT 先挖段等未预检路径 / 仓库竞态）→ 真缺：气泡 + 上报困难表 + 缺工具记录
         LOGGER.info("[MineDebug] 女仆={} 装备流程(五级全空→困难表) {} @ {}",
                 shortId(maid), state.getBlock(), pos.toShortString());
+        showBubbleWithCooldown(maid, "缺少工具，无法继续挖掘", PICKAXE_KEY);
         mine.recordMissingTool(state);
         mine.addHardTask(new MineTask(pos, task.type()));
         releaseCurrent(mine, maid);
@@ -867,24 +883,22 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 放置光源（2026-09-04 拍板：摆放面只检查侧面，不允许上/下两面挂）
-    //   原因：放置时下一层尚未挖掘、地面仍是实体，若允许落地放置，灯会被下层挖掉
-    //   火把贴墙：WallTorchBlock.FACING 按支撑墙设置；非火把光源（灯笼等）无法贴墙 → 放不了 → 调用方放弃该灯位
-    private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, BlockPos target)
+    // 放置光源（2026-09-04 拍板：只认火把；朝向按灯位几何推算支撑墙）
+    //   FACING = 支撑方向（火把格指向支撑墙），放置前原版 canSurvive 校验，
+    //   不活则试反方向（语义翻转自动纠正），仍不活 → 放弃该灯位（不再强行 setBlock 插空气）
+    private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, MineInstance mine, BlockPos target)
     {
-        Direction facing = findWallFace(level, target);
-        if (facing == null) return false;
+        Direction support = mine.supportDirection(target);
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         for (int i = 0; i < inv.size(); i++)
         {
             ItemResource res = inv.getResource(i);
             if (res.isEmpty()) continue;
             ItemStack stack = new ItemStack(res.getItem(), 1);
-            if (!isLightItem(stack)) continue;
-            if (!(stack.getItem() instanceof BlockItem bi)) continue;
-            if (!stack.is(Items.TORCH)) continue;       // 只有火把能贴墙挂
-            BlockState placeState = Blocks.WALL_TORCH.defaultBlockState()
-                    .setValue(WallTorchBlock.FACING, facing);
+            if (!stack.is(Items.TORCH)) continue;
+
+            BlockState placeState = survivingWallState(level, target, support);
+            if (placeState == null) return false;
             level.setBlock(target, placeState, 3);
             try (Transaction tx = Transaction.openRoot())
             {
@@ -896,20 +910,15 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return false;
     }
 
-    // 找水平方向上的实体墙（火把贴墙面），返回方向供 WallTorchBlock.FACING 使用
-    // （2026-09-04 修正：原版 FACING 语义 = 从火把格指向支撑墙——原版 canSurvive 以
-    //   pos.relative(FACING) 校验墙面，先前返回反方向导致火把视觉偏一格且四面镜像）
-    private static Direction findWallFace(ServerLevel level, BlockPos target)
+    // FACING 推算（指向支撑墙）+ 原版 canSurvive 兜底：不活则试反方向（语义翻转自动纠正）
+    private static BlockState survivingWallState(ServerLevel level, BlockPos target, Direction support)
     {
-        for (Direction d : new Direction[]{Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST})
-        {
-            BlockPos neighbor = target.relative(d);
-            BlockState state = level.getBlockState(neighbor);
-            if (!state.isAir() && state.isSolid())
-            {
-                return d;
-            }
-        }
+        BlockState primary = Blocks.WALL_TORCH.defaultBlockState()
+                .setValue(WallTorchBlock.FACING, support);
+        if (primary.canSurvive(level, target)) return primary;
+        BlockState flipped = Blocks.WALL_TORCH.defaultBlockState()
+                .setValue(WallTorchBlock.FACING, support.getOpposite());
+        if (flipped.canSurvive(level, target)) return flipped;
         return null;
     }
 
@@ -1194,6 +1203,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         navFailCount = 0;
         waitTicks = 0;
         finished = false;
+        exhaustedLogged = false;
         pendingDeposit = false;
         digProgress = 0f;
         digPos = null;
