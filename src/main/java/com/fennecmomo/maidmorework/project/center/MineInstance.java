@@ -333,7 +333,7 @@ public class MineInstance extends ProjectCenterInstance
                     lights.add(new BlockPos(cx, h, p.getMinZ() + 2));
                     if (h + 3 < mineY)
                     {
-                        lights.add(new BlockPos(cx - 1, h + 3, p.getMinZ()));
+                        lights.add(new BlockPos(cx, h + 3, p.getMinZ()));
                     }
                 }
                 case 2 -> // 南边：平台行 z=maxZ-1..maxZ，墙在 maxZ+1
@@ -341,7 +341,7 @@ public class MineInstance extends ProjectCenterInstance
                     lights.add(new BlockPos(cx, h, p.getMaxZ() - 2));
                     if (h + 3 < mineY)
                     {
-                        lights.add(new BlockPos(cx - 1, h + 3, p.getMaxZ()));
+                        lights.add(new BlockPos(cx, h + 3, p.getMaxZ()));
                     }
                 }
                 case 1 -> // 西侧（planner case1：列 x=minX..minX+1），墙在 minX-1，沿 z 行进
@@ -349,7 +349,7 @@ public class MineInstance extends ProjectCenterInstance
                     lights.add(new BlockPos(p.getMinX() + 2, h, cz));
                     if (h + 3 < mineY)
                     {
-                        lights.add(new BlockPos(p.getMinX(), h + 3, cz - 1));
+                        lights.add(new BlockPos(p.getMinX(), h + 3, cz));
                     }
                 }
                 case 3 -> // 东侧（planner case3：列 x=maxX-1..maxX），墙在 maxX+1
@@ -357,7 +357,7 @@ public class MineInstance extends ProjectCenterInstance
                     lights.add(new BlockPos(p.getMaxX() - 2, h, cz));
                     if (h + 3 < mineY)
                     {
-                        lights.add(new BlockPos(p.getMaxX(), h + 3, cz - 1));
+                        lights.add(new BlockPos(p.getMaxX(), h + 3, cz));
                     }
                 }
             }
@@ -632,10 +632,13 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos pos = task.pos();
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
+            // 已解决判定按任务类型：DESTROY→空气；FILL→非空气；SETLIGHT→该格有光源
+            // （2026-09-04 修正：SETLIGHT 的空气恰恰是"未解决"，沿用 default 会把任务秒删、永不派发）
             boolean solved = switch (task.type())
             {
-                case FILL -> !state.isAir();          // 已被补上
-                default -> state.isAir();             // 已被挖掉
+                case FILL -> !state.isAir();
+                case SETLIGHT -> state.getLightEmission() > 0;
+                default -> state.isAir();
             };
             if (solved)
             {

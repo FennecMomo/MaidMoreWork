@@ -889,7 +889,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private boolean tryPlaceLight(ServerLevel level, EntityMaid maid, MineInstance mine, BlockPos target)
     {
         Direction support = mine.supportDirection(target);
-        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        // 统一走合并容器（2026-09-04 修正：火把常在扩展背包，扫基础背包找不到 → 永远放不上）
+        CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
         for (int i = 0; i < inv.size(); i++)
         {
             ItemResource res = inv.getResource(i);
@@ -922,10 +923,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         return null;
     }
 
-    // 女仆背包（基础背包）里是否还有光源物品（SETLIGHT 放置失败时区分"没灯"与"放不了"）
+    // 女仆背包里是否还有光源物品（SETLIGHT 放置失败时区分"没灯"与"放不了"；合并容器读写）
     private static boolean hasLightInInv(EntityMaid maid)
     {
-        ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
+        CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
         for (int i = 0; i < inv.size(); i++)
         {
             ItemResource res = inv.getResource(i);
