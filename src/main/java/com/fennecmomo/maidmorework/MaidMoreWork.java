@@ -114,6 +114,7 @@ public class MaidMoreWork
                         if (payload.typeName().isEmpty())
                         {
                             ProjectClientHelper.infoCenterPos = null;
+                            ProjectClientHelper.infoMissingTools = java.util.List.of();
                         }
                         else
                         {
@@ -123,6 +124,7 @@ public class MaidMoreWork
                             ProjectClientHelper.infoMaidCount = payload.maidCount();
                             ProjectClientHelper.infoRadius = payload.radius();
                             ProjectClientHelper.infoCenterName = payload.name();
+                            ProjectClientHelper.infoMissingTools = payload.missingTools();
                         }
                     }
             );

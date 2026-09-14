@@ -67,6 +67,11 @@ public final class ProjectHudRenderer
         lines.add(Component.literal("大小: " + ProjectClientHelper.infoRadius));
         lines.add(Component.literal("工程: " + ProjectClientHelper.infoProjectCount));
         lines.add(Component.literal("女仆: " + ProjectClientHelper.infoMaidCount));
+        if (!ProjectClientHelper.infoMissingTools.isEmpty())
+        {
+            lines.add(Component.literal("§c缺少: "
+                    + String.join("、", ProjectClientHelper.infoMissingTools)));
+        }
         BillboardRenderer.render(buf, ps, mc.font, lines,
                 MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
 

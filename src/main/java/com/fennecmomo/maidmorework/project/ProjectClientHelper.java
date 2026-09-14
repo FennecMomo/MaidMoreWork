@@ -1,6 +1,7 @@
 package com.fennecmomo.maidmorework.project;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,6 +27,7 @@ public final class ProjectClientHelper
     public static int infoMaidCount = 0;
     public static int infoRadius = 0;
     public static String infoCenterName = "";
+    public static List<String> infoMissingTools = List.of();
 
     private static int queryTimer = 0;
 
@@ -67,5 +69,6 @@ public final class ProjectClientHelper
         infoMaidCount = 0;
         infoRadius = 0;
         infoCenterName = "";
+        infoMissingTools = List.of();
     }
 }
