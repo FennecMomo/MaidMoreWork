@@ -125,7 +125,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid)
     {
         if (!maid.isHomeModeEnable() && maid.canBrainMoving()) return false;
-        return resolveMine(maid) != null;
+        MineInstance mine = resolveMine(maid);
+        return mine != null && !mine.isExhausted();
     }
 
     @Override
@@ -133,7 +134,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     {
         if (finished) return false;
         if (!maid.isHomeModeEnable() && maid.canBrainMoving()) return false;
-        return resolveMine(maid) != null;
+        MineInstance mine = resolveMine(maid);
+        if (mine != null && mine.isExhausted())
+        {
+            mine.releaseAllMembers(level);
+            return false;
+        }
+        return mine != null;
     }
 
     // ===================== 生命周期 =====================
@@ -171,6 +178,14 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             finished = true;
             logTransition(maid, "结束", "矿井失联");
+            return;
+        }
+
+        if (mine.isExhausted())
+        {
+            mine.releaseAllMembers(level);
+            finished = true;
+            logTransition(maid, "结束", "矿井已挖尽，释放全部成员");
             return;
         }
 
@@ -1156,6 +1171,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         for (var c : ProjectCenterManager.allCenters(level))
         {
             if (!(c instanceof MineInstance m)) continue;
+            if (m.isExhausted()) continue;
             if (!ProjectCenterManager.isWithinMaidRange(maid, c.getBlockPos())) continue;
             double dist = maid.blockPosition().distSqr(c.getBlockPos());
             if (dist < bestDist)

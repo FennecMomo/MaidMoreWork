@@ -285,21 +285,27 @@ public class MineInstance extends ProjectCenterInstance
         }
 
         int mineY = getBlockPos().getY();
-        // 矿井方块自身加入保留区，防止被挖
-        keepsByY.computeIfAbsent(mineY, key -> new HashSet<>()).add(getBlockPos());
-        // 入口清理 mineY+1 ~ mineY+2（保留区为空，全挖）
-        keepsByY.computeIfAbsent(mineY + 1, key -> new HashSet<>());
-        keepsByY.computeIfAbsent(mineY + 2, key -> new HashSet<>());
-
-        // 矿井下方一层支撑保留区（只保留 |z-中心|≤1，避免挡住楼梯）
-        Set<BlockPos> support = keepsByY.computeIfAbsent(mineY - 1, key -> new HashSet<>());
-        for (int x = p.getMinX(); x <= p.getMaxX(); x++)
+        // 入口清理、矿井方块保护、初始支撑只属于 C0。
+        // 之前每个周期都重复添加这些层，导致 C1 重新回到 mineY+1/mineY+2 顶部，
+        // 把入口/首层平台再次当作待挖区域。
+        if (cycle == 0)
         {
-            for (int z = p.getMinZ(); z <= p.getMaxZ(); z++)
+            // 矿井方块自身加入保留区，防止被挖
+            keepsByY.computeIfAbsent(mineY, key -> new HashSet<>()).add(getBlockPos());
+            // 入口清理 mineY+1 ~ mineY+2（保留区为空，全挖）
+            keepsByY.computeIfAbsent(mineY + 1, key -> new HashSet<>());
+            keepsByY.computeIfAbsent(mineY + 2, key -> new HashSet<>());
+
+            // 矿井下方一层支撑保留区（只保留 |z-中心|≤1，避免挡住楼梯）
+            Set<BlockPos> support = keepsByY.computeIfAbsent(mineY - 1, key -> new HashSet<>());
+            for (int x = p.getMinX(); x <= p.getMaxX(); x++)
             {
-                if (Math.abs(z - getBlockPos().getZ()) <= 1)
+                for (int z = p.getMinZ(); z <= p.getMaxZ(); z++)
                 {
-                    support.add(new BlockPos(x, mineY - 1, z));
+                    if (Math.abs(z - getBlockPos().getZ()) <= 1)
+                    {
+                        support.add(new BlockPos(x, mineY - 1, z));
+                    }
                 }
             }
         }
@@ -991,6 +997,19 @@ public class MineInstance extends ProjectCenterInstance
     public boolean isLayerPaused()
     {
         return layerPaused;
+    }
+
+    // 挖尽后释放所有在线成员，但不删除矿井实例/方块（D2：实例与仓库保留）
+    public void releaseAllMembers(ServerLevel level)
+    {
+        for (UUID uuid : new ArrayList<>(getMemberIds()))
+        {
+            if (level.getEntity(uuid) instanceof EntityMaid maid)
+            {
+                releaseWork(maid);
+                ProjectCenterManager.releaseMaid(maid);
+            }
+        }
     }
 
     // 信息包附加数据（缺工具列表，中心面板显示"缺少：xxx"）
