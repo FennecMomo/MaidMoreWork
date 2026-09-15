@@ -10,6 +10,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
@@ -47,35 +48,40 @@ public final class ProjectHudRenderer
         buf.endBatch(RenderTypes.entityTranslucent(WHITE_TEX));
     }
 
+    // 渲染所有已缓存工程中心的信息面板（各自渲染在中心方块上方，按距离门限过滤）
+    // 2026-09-04 修正：按中心逐个渲染，不再使用全局单份信息（多中心轮流广播导致闪烁）
     private static void renderCenterInfo(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,
                                           Camera camera, Vec3 camPos, int maxDistSq)
     {
-        if (ProjectClientHelper.infoCenterPos == null) return;
-        if (ProjectClientHelper.infoCenterPos.distToCenterSqr(camPos) > maxDistSq) return;
-
-        Vec3 worldPos = ProjectClientHelper.infoCenterPos.getCenter().add(0, 1.5, 0);
-        ps.pushPose();
-        ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
-        ps.mulPose(camera.rotation());
-        ps.scale(MaidMoreWorkConfig.PANEL_SCALE, -MaidMoreWorkConfig.PANEL_SCALE, MaidMoreWorkConfig.PANEL_SCALE);
-        ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
-
-        List<Component> lines = new ArrayList<>();
-        lines.add(Component.literal(ProjectClientHelper.infoCenterName));
-        lines.add(Component.literal("运行正常"));
-        lines.add(Component.literal(ProjectClientHelper.infoTypeName));
-        lines.add(Component.literal("大小: " + ProjectClientHelper.infoRadius));
-        lines.add(Component.literal("工程: " + ProjectClientHelper.infoProjectCount));
-        lines.add(Component.literal("女仆: " + ProjectClientHelper.infoMaidCount));
-        if (!ProjectClientHelper.infoMissingTools.isEmpty())
+        for (var entry : ProjectClientHelper.CENTERS.entrySet())
         {
-            lines.add(Component.literal("§c缺少: "
-                    + String.join("、", ProjectClientHelper.infoMissingTools)));
-        }
-        BillboardRenderer.render(buf, ps, mc.font, lines,
-                MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
+            BlockPos centerPos = entry.getKey();
+            ProjectClientHelper.CenterInfo info = entry.getValue();
+            if (centerPos.distToCenterSqr(camPos) > maxDistSq) continue;
 
-        ps.popPose();
+            Vec3 worldPos = centerPos.getCenter().add(0, 1.5, 0);
+            ps.pushPose();
+            ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
+            ps.mulPose(camera.rotation());
+            ps.scale(MaidMoreWorkConfig.PANEL_SCALE, -MaidMoreWorkConfig.PANEL_SCALE, MaidMoreWorkConfig.PANEL_SCALE);
+            ps.translate(0, 0, MaidMoreWorkConfig.PANEL_TOWARD_PLAYER_OFFSET);
+
+            List<Component> lines = new ArrayList<>();
+            lines.add(Component.literal(info.name()));
+            lines.add(Component.literal("运行正常"));
+            lines.add(Component.literal(info.typeName()));
+            lines.add(Component.literal("大小: " + info.radius()));
+            lines.add(Component.literal("工程: " + info.projectCount()));
+            lines.add(Component.literal("女仆: " + info.maidCount()));
+            if (!info.missingTools().isEmpty())
+            {
+                lines.add(Component.literal("§c缺少: " + String.join("、", info.missingTools())));
+            }
+            BillboardRenderer.render(buf, ps, mc.font, lines,
+                    MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
+
+            ps.popPose();
+        }
     }
 
     private static void renderProjectHuds(Minecraft mc, PoseStack ps, MultiBufferSource.BufferSource buf,

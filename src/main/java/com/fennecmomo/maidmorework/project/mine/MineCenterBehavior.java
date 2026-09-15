@@ -24,7 +24,6 @@ import net.minecraft.world.level.block.WallTorchBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
-import net.minecraft.world.level.material.Fluids;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
@@ -54,7 +53,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             org.slf4j.LoggerFactory.getLogger(MineCenterBehavior.class);
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
-    private static final int MAX_NAV_FAIL = 3;          // 导航失败次数上限，超过后强制到达
+    private static final int MAX_NAV_FAIL = 10;         // 导航失败次数上限（熔断：视为到达继续执行，不取消任务）
     private static final int FETCH_GROUP = 10;          // B2/B3：取消耗品一次一组（10个）
     private static final int WAIT_TICKS = 40;           // 阻塞等待节流（B2 仓库无货）
     private static final int BUBBLE_COOLDOWN = 120;     // 气泡冷却（tick）
@@ -311,6 +310,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     // 缺垫脚 → 释放任务 + 取货支线（B3，静默执行，仓库无货才在取货处冒泡）
                     releaseCurrent(mine, maid);
                     fetchKind = FetchKind.SCAFFOLD;
+                    reachedTarget = false;
                 }
             }
 
@@ -332,6 +332,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     {
                         releaseCurrent(mine, maid);
                         fetchKind = FetchKind.SCAFFOLD;
+                        reachedTarget = false;
                     }
                     return;
                 }
@@ -437,6 +438,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             releaseCurrent(mine, maid);
             fetchKind = FetchKind.SCAFFOLD;
+            reachedTarget = false;
         }
     }
 
@@ -451,6 +453,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (freeSlots(maid) == 0)
         {
             pendingDeposit = true;
+            reachedTarget = false;
             logTransition(maid, "存矿", "背包满");
         }
     }
@@ -458,35 +461,24 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     // ===================== 存取支线 =====================
 
     // B3 存矿：就近矿井方块，黑名单外全部入仓
-    // 寻路连续失败 → 气泡提示 + 放弃本次存货继续干活（多余掉落自然落地），不死等
+    // 到达判定：isNear 或导航熔断（reachedTarget）——熔断后按"已到达"继续执行，不取消任务
     private void handleDeposit(ServerLevel level, EntityMaid maid, MineInstance mine)
     {
-        if (isNear(maid, mine.getBlockPos()))
+        if (isNear(maid, mine.getBlockPos()) || reachedTarget)
         {
             depositToWarehouse(mine, maid, level);
             pendingDeposit = false;
+            reachedTarget = false;
             logTransition(maid, "挖矿循环", "存矿完成");
             return;
         }
-        if (!maid.getNavigation().isInProgress())
-        {
-            BlockPos walkTarget = findWalkTarget(level, mine.getBlockPos());
-            boolean moved = walkTarget != null && maid.getNavigation().moveTo(
-                    walkTarget.getX() + 0.5, walkTarget.getY(), walkTarget.getZ() + 0.5, WALK_SPEED);
-            if (!moved && ++navFailCount >= MAX_NAV_FAIL)
-            {
-                showBubbleWithCooldown(maid, "无法返回仓库，继续干活", LIGHT_KEY);
-                logTransition(maid, "挖矿循环", "无法返回仓库，放弃本次存货");
-                pendingDeposit = false;
-                navFailCount = 0;
-            }
-        }
+        navigate(level, maid, mine.getBlockPos());
     }
 
-    // B3 取垫脚：就近矿井方块，从仓库取一组垫脚方块
+    // B3 取垫脚：就近矿井方块，从仓库取一组垫脚方块（到达判定同存矿）
     private void handleScaffoldFetch(ServerLevel level, EntityMaid maid, MineInstance mine)
     {
-        if (isNear(maid, mine.getBlockPos()))
+        if (isNear(maid, mine.getBlockPos()) || reachedTarget)
         {
             List<ItemStack> taken = mine.takeFromWarehouse(MineCenterBehavior::isScaffoldItem, FETCH_GROUP);
             if (taken.isEmpty())
@@ -505,6 +497,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
             fetchKind = FetchKind.NONE;
+            reachedTarget = false;
             logTransition(maid, "挖矿循环", "取垫脚完成");
             return;
         }
@@ -519,7 +512,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             fetchKind = FetchKind.NONE;
             return;
         }
-        if (isNear(maid, mine.getBlockPos()))
+        if (isNear(maid, mine.getBlockPos()) || reachedTarget)
         {
             BlockState targetState = level.getBlockState(toolFetchSpec.taskPos());
             java.util.function.Predicate<ItemStack> predicate = toolFetchSpec.recommended()
@@ -533,6 +526,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 releaseCurrent(mine, maid);
                 toolFetchSpec = null;
                 fetchKind = FetchKind.NONE;
+                reachedTarget = false;
                 return;
             }
             for (ItemStack stack : taken)
@@ -546,6 +540,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             equipPickaxe(maid);     // 先粗装，下次挖掘前装备流程精调
             toolFetchSpec = null;
             fetchKind = FetchKind.NONE;
+            reachedTarget = false;
             logTransition(maid, "挖矿循环", "取工具完成");
             return;
         }
@@ -574,6 +569,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             toolFetchSpec = new ToolFetchSpec(pos, true);
             fetchKind = FetchKind.TOOL;
+            reachedTarget = false;
             return false;
         }
         // 非必须 → 空手挖（主手收回背包）
@@ -598,6 +594,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             toolFetchSpec = new ToolFetchSpec(pos, false);
             fetchKind = FetchKind.TOOL;
+            reachedTarget = false;
             return false;
         }
         // 五级全空（SETLIGHT 先挖段等未预检路径 / 仓库竞态）→ 真缺：气泡 + 上报困难表 + 缺工具记录
@@ -775,6 +772,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 navFailCount++;
                 if (navFailCount >= MAX_NAV_FAIL || distSq < 25.0)
                 {
+                    LOGGER.info("[MineDebug] 女仆={} 导航熔断→视为到达 @ {}",
+                            shortId(maid), target.toShortString());
                     reachedTarget = true;
                     navFailCount = 0;
                 }
@@ -791,6 +790,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 navFailCount++;
                 if (navFailCount >= MAX_NAV_FAIL || distSq < 25.0)
                 {
+                    LOGGER.info("[MineDebug] 女仆={} 导航熔断→视为到达 @ {}",
+                            shortId(maid), target.toShortString());
                     reachedTarget = true;
                     navFailCount = 0;
                 }
@@ -1062,16 +1063,17 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 || block.builtInRegistryHolder().is(Tags.Blocks.STONES);
     }
 
+    // 源流体判定（§9 修正：FluidState.isSource——流动流体不算源，走 FILL 顶掉）
     private static boolean isFluidSource(BlockState state)
     {
-        return state.getBlock() == Blocks.WATER || state.getBlock() == Blocks.LAVA;
+        return state.getFluidState().isSource();
     }
 
+    // 取方块所含流体类型（§9 修正：从 FluidState 取，兼容含水方块）
     private static Fluid getFluidFromBlock(BlockState state)
     {
-        if (state.getBlock() == Blocks.WATER) return Fluids.WATER;
-        if (state.getBlock() == Blocks.LAVA) return Fluids.LAVA;
-        return null;
+        var fluidState = state.getFluidState();
+        return fluidState.isEmpty() ? null : fluidState.getType();
     }
 
     // ===================== 库存/装备/气泡 =====================

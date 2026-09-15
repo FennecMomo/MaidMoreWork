@@ -480,6 +480,13 @@ public class MineInstance extends ProjectCenterInstance
                     {
                         type = MineTask.Type.FILL;                       // 空洞 → 补（§5）
                     }
+                    else if (!state.getFluidState().isEmpty())
+                    {
+                        // 保留位流体（§9 修正：先前被"非矿物跳过"误伤导致源流体无人处理）：
+                        // 源流体 → REPLACE（清掉+收流体瓶+垫脚）；流动流体 → FILL（垫脚直接顶掉）
+                        type = state.getFluidState().isSource()
+                                ? MineTask.Type.REPLACE : MineTask.Type.FILL;
+                    }
                     else if (isScaffoldState(state) || !state.is(Tags.Blocks.ORES))
                     {
                         // 垫脚完好 → 丢已处理；非矿物实体（砂岩/石头等）→ 无需替换（2026-09-04 拍板）

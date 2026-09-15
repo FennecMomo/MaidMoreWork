@@ -113,18 +113,15 @@ public class MaidMoreWork
                     (payload, context) -> {
                         if (payload.typeName().isEmpty())
                         {
-                            ProjectClientHelper.infoCenterPos = null;
-                            ProjectClientHelper.infoMissingTools = java.util.List.of();
+                            // 空类型 = 中心已删除：移除对应缓存
+                            ProjectClientHelper.CENTERS.remove(payload.centerPos());
                         }
                         else
                         {
-                            ProjectClientHelper.infoCenterPos = payload.centerPos();
-                            ProjectClientHelper.infoTypeName = payload.typeName();
-                            ProjectClientHelper.infoProjectCount = payload.projectCount();
-                            ProjectClientHelper.infoMaidCount = payload.maidCount();
-                            ProjectClientHelper.infoRadius = payload.radius();
-                            ProjectClientHelper.infoCenterName = payload.name();
-                            ProjectClientHelper.infoMissingTools = payload.missingTools();
+                            ProjectClientHelper.CENTERS.put(payload.centerPos(),
+                                    new ProjectClientHelper.CenterInfo(
+                                            payload.typeName(), payload.projectCount(), payload.maidCount(),
+                                            payload.radius(), payload.name(), payload.missingTools()));
                         }
                     }
             );
