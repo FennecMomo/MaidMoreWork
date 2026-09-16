@@ -54,6 +54,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
     private static final int MAX_NAV_FAIL = 10;         // 导航失败次数上限（熔断：视为到达继续执行，不取消任务）
+    private static final int NAV_STUCK_TICKS = 200;     // 寻路卡死熔断：持续寻路超过 10 秒 → 传送至矿井方块旁（水中游不动等）
     private static final int FETCH_GROUP = 10;          // B2/B3：取消耗品一次一组（10个）
     private static final int WAIT_TICKS = 40;           // 阻塞等待节流（B2 仓库无货）
     private static final int BUBBLE_COOLDOWN = 120;     // 气泡冷却（tick）
@@ -67,6 +68,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private MineTask currentTask = null;    // 当前任务
     private boolean reachedTarget = false;
     private int navFailCount = 0;
+    private int navStuckTicks = 0;          // 持续寻路计时（卡死熔断用）
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井失联 → 结束行为（挖尽为待机，不结束）
     private boolean exhaustedLogged = false; // 挖尽待机日志与放权只执行一次
@@ -160,6 +162,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         currentTask = null;
         reachedTarget = false;
         navFailCount = 0;
+        navStuckTicks = 0;
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
@@ -178,6 +181,25 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             finished = true;
             logTransition(maid, "结束", "矿井失联");
             return;
+        }
+
+        // 寻路卡死熔断（2026-09-04 拍板）：持续处于寻路状态超过 10 秒（水中游不动等）→
+        // 直接传送到矿井方块旁并重置导航状态，避免永远卡住
+        if (maid.getNavigation().isInProgress())
+        {
+            if (++navStuckTicks > NAV_STUCK_TICKS)
+            {
+                navStuckTicks = 0;
+                LOGGER.info("[MineDebug] 女仆={} 寻路超时熔断→传送至矿井方块旁", shortId(maid));
+                teleportNearMine(level, maid, mine);
+                reachedTarget = false;
+                navFailCount = 0;
+                return;
+            }
+        }
+        else
+        {
+            navStuckTicks = 0;
         }
 
         if (mine.isExhausted())
@@ -361,6 +383,22 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     finishTask(mine, maid, task);
                     return;
                 }
+                if (!state.getFluidState().isEmpty())
+                {
+                    // 光源位流体（2026-09-04 扩展：先前漏处理，光源位是水源时水永远清不掉）：
+                    // 清掉（源→收瓶）后释放任务——下一轮 SETLIGHT 重派时格已空气即可放火把；
+                    // 层末尾其他水源已清完，不会回流（若仍有渗流，下轮再清一次，即时操作无成本）
+                    if (state.getFluidState().isSource())
+                    {
+                        clearFluidAndCollectBottle(level, maid, target, state);
+                    }
+                    else
+                    {
+                        level.setBlock(target, Blocks.AIR.defaultBlockState(), 3);
+                    }
+                    releaseCurrent(mine, maid);
+                    return;
+                }
                 if (!state.isAir())
                 {
                     // 位上有方块 → 真挖掘，挖完下一 tick 走放置
@@ -417,8 +455,24 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 流体处理（§9 修正 2026-09-04）：源流体 → 清掉+收流体瓶（保留位再垫脚）；流动流体 → 直接完成
-    //   （源清完后流动水自然干涸；非保留位隧道格保持空气，不做垫脚）
+    // 清掉源流体并收集对应流体瓶（§9）：置空气 + 入包（塞不下落地）
+    private void clearFluidAndCollectBottle(ServerLevel level, EntityMaid maid, BlockPos target, BlockState state)
+    {
+        Fluid fluid = getFluidFromBlock(state);
+        level.setBlock(target, Blocks.AIR.defaultBlockState(), 3);
+        if (fluid == null) return;
+        ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
+        if (fluidKey == null) return;
+        ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
+        FluidBottleItem.setFluid(bottle, fluidKey);
+        ItemStack leftover = addToInventory(maid, bottle);
+        if (!leftover.isEmpty())
+        {
+            Block.popResource(level, target, leftover);
+        }
+    }
+
+    // 流体处理（§9 修正 2026-09-04）：源流体 → 清掉+收流体瓶+原位放塞子；流动流体 → 直接完成
     private void handleFluidCell(ServerLevel level, EntityMaid maid, MineInstance mine,
                                  MineTask task, BlockPos target, BlockState state)
     {
@@ -428,22 +482,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             finishTask(mine, maid, task);
             return;
         }
-        Fluid fluid = getFluidFromBlock(state);
-        level.setBlock(target, Blocks.AIR.defaultBlockState(), 3);
-        if (fluid != null)
-        {
-            ResourceKey<Fluid> fluidKey = BuiltInRegistries.FLUID.getResourceKey(fluid).orElse(null);
-            if (fluidKey != null)
-            {
-                ItemStack bottle = new ItemStack(MineCenterRegistration.FLUID_BOTTLE.get(), 1);
-                FluidBottleItem.setFluid(bottle, fluidKey);
-                ItemStack leftover = addToInventory(maid, bottle);
-                if (!leftover.isEmpty())
-                {
-                    Block.popResource(level, target, leftover);
-                }
-            }
-        }
+        clearFluidAndCollectBottle(level, maid, target, state);
         // 无论保留位还是非保留位，取完水都立即放一个垫脚方块堵住（2026-09-04 拍板）：
         //   保留位 = 永久墙体；非保留位 = 临时塞子——防止邻水回流并在该格重新形成水源，
         //   矿井 10s 周期核查发现塞子（封存为"应空"）后会滞后把它挖掉，
@@ -821,6 +860,29 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     {
         return maid.distanceToSqr(
                 pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= WALK_REACH_SQ;
+    }
+
+    // 传送到矿井方块旁的安全落点（优先正上方可站立处，其次四周相邻；兜底正上方）
+    private static void teleportNearMine(ServerLevel level, EntityMaid maid, MineInstance mine)
+    {
+        BlockPos base = mine.getBlockPos();
+        BlockPos target = null;
+        for (BlockPos cand : new BlockPos[]{
+                base.above(), base.above(2),
+                base.north(), base.south(), base.east(), base.west()})
+        {
+            if (level.getBlockState(cand).isAir() && level.getBlockState(cand.below()).isSolid())
+            {
+                target = cand;
+                break;
+            }
+        }
+        if (target == null)
+        {
+            target = base.above();
+        }
+        maid.getNavigation().stop();
+        maid.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
     }
 
     // 在目标方块附近找可站立的行走点（先同高度相邻，再上一层俯身）
@@ -1238,6 +1300,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         currentTask = null;
         reachedTarget = false;
         navFailCount = 0;
+        navStuckTicks = 0;
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
