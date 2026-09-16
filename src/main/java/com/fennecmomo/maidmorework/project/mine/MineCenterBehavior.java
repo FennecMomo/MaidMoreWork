@@ -444,12 +444,10 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
         }
-        // 保留位（墙/楼梯）补垫脚；非保留位（隧道）保持空气
-        if (!mine.isKeepPosition(target))
-        {
-            finishTask(mine, maid, task);
-            return;
-        }
+        // 无论保留位还是非保留位，取完水都立即放一个垫脚方块堵住（2026-09-04 拍板）：
+        //   保留位 = 永久墙体；非保留位 = 临时塞子——防止邻水回流并在该格重新形成水源，
+        //   矿井 10s 周期核查发现塞子（封存为"应空"）后会滞后把它挖掉，
+        //   那时邻位水源已被清完，不会回流（无塞子时"取水→回流→再取"极不稳定）
         if (tryPlaceScaffold(level, maid, target))
         {
             finishTask(mine, maid, task);

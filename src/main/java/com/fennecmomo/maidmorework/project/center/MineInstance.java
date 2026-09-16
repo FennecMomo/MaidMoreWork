@@ -606,20 +606,22 @@ public class MineInstance extends ProjectCenterInstance
     {
         layerSubtasks.remove(maid.getUUID());
         settleWaitUntil = 0;
+        if (task.type() == MineTask.Type.FETCH_LIGHT) return;   // 取灯非坐标任务
+        // 完成的坐标记入本层已处理（防止"临时塞子"等完成后被本层扫描立即重复派发）
+        layerProcessed.add(task.pos());
         switch (task.type())
         {
             case DESTROY -> sealAs(task.pos(), sealedAir);
             case FILL -> sealAs(task.pos(), sealedSolid);
             case REPLACE ->
             {
-                // 按完成后的实际世界状态封存（2026-09-04 修正：非保留位清流体后是空气，
-                // 不能按"实体"封存，否则 10s 检查会反过来逼女仆把隧道填上）
-                boolean solid = maid.level() instanceof ServerLevel lvl
-                        && !lvl.getBlockState(task.pos()).isAir();
-                sealAs(task.pos(), solid ? sealedSolid : sealedAir);
+                // 按保留位分类封存（2026-09-04 拍板：非保留位"塞子"封"应空"，
+                // 交由 10s 周期核查滞后挖除——那时邻位水源已清完，不会回流；
+                // 保留位垫脚封"实体"永久保留）
+                sealAs(task.pos(), isKeepPosition(task.pos()) ? sealedSolid : sealedAir);
             }
             case SETLIGHT -> sealAs(task.pos(), sealedLights);
-            default -> { }   // FETCH_LIGHT 非坐标任务
+            default -> { }
         }
         // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
