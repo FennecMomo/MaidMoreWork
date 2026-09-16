@@ -139,6 +139,15 @@ public class MineInstance extends ProjectCenterInstance
     private int solidCursor = 0;
     private int lightCursor = 0;
 
+    // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
+    // 女仆无位移且未施工累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
+    private static final int STUCK_SAMPLE_TICKS = 100;      // 采样间隔（5 秒）
+    private static final int STUCK_LIMIT_TICKS = 200;       // 无位移累计上限（10 秒）
+    private final Map<UUID, BlockPos> stuckSamplePos = new HashMap<>();
+    private final Map<UUID, Integer> stuckTicks = new HashMap<>();
+    private final Set<UUID> stuckRecovery = new HashSet<>();
+    private long lastStuckSampleTime = 0;
+
     // 层结算复核等待（2 秒，2026-09-04 拍板：层清空后等掉落物落网再推进）
     private static final long SETTLE_WAIT_TICKS = 40;
     private long settleWaitUntil = 0;
@@ -920,6 +929,12 @@ public class MineInstance extends ProjectCenterInstance
     {
         super.tick(level);
         long now = level.getGameTime();
+        if (lastStuckSampleTime == 0) lastStuckSampleTime = now;
+        if (now - lastStuckSampleTime >= STUCK_SAMPLE_TICKS)
+        {
+            lastStuckSampleTime = now;
+            sampleStuckMaids(level);
+        }
         if (lastRefreshGameTime == 0)
         {
             lastRefreshGameTime = now;
@@ -929,6 +944,43 @@ public class MineInstance extends ProjectCenterInstance
         lastRefreshGameTime = now;
         refreshSealedLists(level);
         if (layerPaused) tryResumeLayer(level);
+    }
+
+    // 卡死采样（5 秒一次）：豁免（已在中心旁 / 在绑定子任务旁施工）或本采样周期位移≥1格 → 清零，
+    // 否则累计；达到 10 秒 → 标记一次性通知（行为侧消费后传送并重置导航状态）
+    private void sampleStuckMaids(ServerLevel level)
+    {
+        for (UUID uuid : getMemberIds())
+        {
+            if (!(level.getEntity(uuid) instanceof EntityMaid maid) || maid.isRemoved())
+            {
+                stuckSamplePos.remove(uuid);
+                stuckTicks.remove(uuid);
+                continue;
+            }
+            BlockPos pos = maid.blockPosition();
+            BlockPos last = stuckSamplePos.put(uuid, pos);
+            MineTask bound = layerSubtasks.get(uuid);
+            boolean excused = pos.distSqr(getBlockPos()) <= 16
+                    || (bound != null && pos.distSqr(bound.pos()) <= 16);
+            if (excused || last == null || pos.distSqr(last) >= 1)
+            {
+                stuckTicks.remove(uuid);
+                continue;
+            }
+            if (stuckTicks.merge(uuid, STUCK_SAMPLE_TICKS, Integer::sum) >= STUCK_LIMIT_TICKS)
+            {
+                stuckTicks.remove(uuid);
+                stuckRecovery.add(uuid);
+                LOGGER.info("[MineDebug] 女仆={} 卡死熔断(10秒无位移)→通知传送至矿井方块旁", shortId(uuid));
+            }
+        }
+    }
+
+    // 行为侧消费卡死通知（一次性）
+    public boolean consumeStuckRecovery(UUID uuid)
+    {
+        return stuckRecovery.remove(uuid);
     }
 
     // 暂停层 10s 重判：可处理比例回落到阈值内 → 自动恢复（工具来源=仓库+在场女仆）
