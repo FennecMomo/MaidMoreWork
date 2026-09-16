@@ -286,6 +286,13 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     finishTask(mine, maid, task);
                     return;
                 }
+                if (!state.getFluidState().isEmpty())
+                {
+                    // 流体兜底（2026-09-04 修正：历史遗留的流体 DESTROY 条目，如困难表）→
+                    // 走流体处理，绝不做慢挖（水硬度 100 且邻水回流，会永远挖不完）
+                    handleFluidCell(level, maid, mine, task, target, state);
+                    return;
+                }
                 if (progressDig(level, maid, mine, task, target, state))
                 {
                     checkBelowSafety(level, maid, target);
@@ -314,12 +321,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
 
-            // === REPLACE：非垫脚实体块挖掉再垫（§5）；源流体清掉并收流体瓶（§9） ===
+            // === REPLACE：非垫脚实体块挖掉再垫（§5）；流体清掉（§9） ===
             case REPLACE ->
             {
-                if (isFluidSource(state))
+                if (!state.getFluidState().isEmpty())
                 {
-                    handleSourceFluid(level, maid, mine, task, target);
+                    handleFluidCell(level, maid, mine, task, target, state);
                     return;
                 }
                 if (state.isAir())
@@ -410,11 +417,18 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
     }
 
-    // 源流体处理（§9）：清掉流体 + 对应流体瓶塞 + 垫脚
-    private void handleSourceFluid(ServerLevel level, EntityMaid maid, MineInstance mine,
-                                   MineTask task, BlockPos target)
+    // 流体处理（§9 修正 2026-09-04）：源流体 → 清掉+收流体瓶（保留位再垫脚）；流动流体 → 直接完成
+    //   （源清完后流动水自然干涸；非保留位隧道格保持空气，不做垫脚）
+    private void handleFluidCell(ServerLevel level, EntityMaid maid, MineInstance mine,
+                                 MineTask task, BlockPos target, BlockState state)
     {
-        Fluid fluid = getFluidFromBlock(level.getBlockState(target));
+        if (!state.getFluidState().isSource())
+        {
+            // 流动流体：无实体可处理，等源被清后自然干涸
+            finishTask(mine, maid, task);
+            return;
+        }
+        Fluid fluid = getFluidFromBlock(state);
         level.setBlock(target, Blocks.AIR.defaultBlockState(), 3);
         if (fluid != null)
         {
@@ -429,6 +443,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     Block.popResource(level, target, leftover);
                 }
             }
+        }
+        // 保留位（墙/楼梯）补垫脚；非保留位（隧道）保持空气
+        if (!mine.isKeepPosition(target))
+        {
+            finishTask(mine, maid, task);
+            return;
         }
         if (tryPlaceScaffold(level, maid, target))
         {

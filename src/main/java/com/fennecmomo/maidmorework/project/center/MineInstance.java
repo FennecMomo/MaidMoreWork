@@ -474,18 +474,31 @@ public class MineInstance extends ProjectCenterInstance
                     continue;
                 }
                 MineTask.Type type;
-                if (keeps.contains(pos))
+                if (!state.getFluidState().isEmpty())
+                {
+                    // 流体统一处理（2026-09-04 修正：非保留位水此前被派 DESTROY——水硬度 100 慢挖
+                    // 且邻水回流，形成"永远挖不完"的死循环）：
+                    //   源流体 → REPLACE（任意位置：清掉+收流体瓶；保留位再垫脚）
+                    //   流动流体 → 保留位 FILL（垫脚顶掉）；非保留位（隧道）跳过，源清完后自然干涸
+                    if (state.getFluidState().isSource())
+                    {
+                        type = MineTask.Type.REPLACE;
+                    }
+                    else if (keeps.contains(pos))
+                    {
+                        type = MineTask.Type.FILL;
+                    }
+                    else
+                    {
+                        layerProcessed.add(pos);
+                        continue;
+                    }
+                }
+                else if (keeps.contains(pos))
                 {
                     if (state.isAir())
                     {
                         type = MineTask.Type.FILL;                       // 空洞 → 补（§5）
-                    }
-                    else if (!state.getFluidState().isEmpty())
-                    {
-                        // 保留位流体（§9 修正：先前被"非矿物跳过"误伤导致源流体无人处理）：
-                        // 源流体 → REPLACE（清掉+收流体瓶+垫脚）；流动流体 → FILL（垫脚直接顶掉）
-                        type = state.getFluidState().isSource()
-                                ? MineTask.Type.REPLACE : MineTask.Type.FILL;
                     }
                     else if (isScaffoldState(state) || !state.is(Tags.Blocks.ORES))
                     {
@@ -596,7 +609,15 @@ public class MineInstance extends ProjectCenterInstance
         switch (task.type())
         {
             case DESTROY -> sealAs(task.pos(), sealedAir);
-            case FILL, REPLACE -> sealAs(task.pos(), sealedSolid);
+            case FILL -> sealAs(task.pos(), sealedSolid);
+            case REPLACE ->
+            {
+                // 按完成后的实际世界状态封存（2026-09-04 修正：非保留位清流体后是空气，
+                // 不能按"实体"封存，否则 10s 检查会反过来逼女仆把隧道填上）
+                boolean solid = maid.level() instanceof ServerLevel lvl
+                        && !lvl.getBlockState(task.pos()).isAir();
+                sealAs(task.pos(), solid ? sealedSolid : sealedAir);
+            }
             case SETLIGHT -> sealAs(task.pos(), sealedLights);
             default -> { }   // FETCH_LIGHT 非坐标任务
         }
@@ -981,13 +1002,33 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos pos = list.get(i);
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
-            boolean violated = satisfiedWhenEmpty ? state.isAir() : !state.isAir();
+            MineTask.Type vType = violationType;
+            boolean violated;
+            if (satisfiedWhenEmpty)
+            {
+                violated = state.isAir();
+            }
+            else if (!state.getFluidState().isEmpty())
+            {
+                // 空置位流体特判（2026-09-04 修正）：流动流体等源清完后自然干涸，不算违规；
+                // 源流体按 REPLACE（清掉收瓶）派发——绝不能派 DESTROY（水慢挖+回流死循环）
+                if (!state.getFluidState().isSource())
+                {
+                    continue;
+                }
+                violated = true;
+                vType = MineTask.Type.REPLACE;
+            }
+            else
+            {
+                violated = true;
+            }
             if (violated)
             {
-                MineTask task = new MineTask(pos.immutable(), violationType);
-                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} (期望非空实际{})", violationType,
+                MineTask task = new MineTask(pos.immutable(), vType);
+                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} 实际={}", vType,
                         pos.toShortString(),
-                        violated && state.isAir() ? "空气" : state.getBlock().getName().getString());
+                        state.isAir() ? "空气" : state.getBlock().getName().getString());
                 addHardTask(task);
             }
         }
@@ -1024,6 +1065,20 @@ public class MineInstance extends ProjectCenterInstance
     protected List<String> infoMissingTools()
     {
         return List.copyOf(missingToolNotes);
+    }
+
+    // 该坐标是否保留位（当前周期缓存命中，或位于围墙环上）——流体处理（是否补垫脚）用
+    public boolean isKeepPosition(BlockPos pos)
+    {
+        Set<BlockPos> keeps = cycleKeeps.get(pos.getY());
+        if (keeps != null && keeps.contains(pos)) return true;
+        SpiralMinePlanner p = planner();
+        if (pos.getY() < getBlockPos().getY())
+        {
+            return pos.getX() == p.getMinX() - 1 || pos.getX() == p.getMaxX() + 1
+                    || pos.getZ() == p.getMinZ() - 1 || pos.getZ() == p.getMaxZ() + 1;
+        }
+        return false;
     }
 
     // 灯位支撑方向推算（2026-09-04 拍板）：灯位必靠某一面墙的内侧 1~2 格，
