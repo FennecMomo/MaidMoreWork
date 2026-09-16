@@ -140,10 +140,12 @@ public class MineInstance extends ProjectCenterInstance
     private int lightCursor = 0;
 
     // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
-    // 女仆无位移且未施工累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
+    // 女仆距目标无进展累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
     private static final int STUCK_SAMPLE_TICKS = 100;      // 采样间隔（5 秒）
-    private static final int STUCK_LIMIT_TICKS = 200;       // 无位移累计上限（10 秒）
-    private final Map<UUID, BlockPos> stuckSamplePos = new HashMap<>();
+    private static final int STUCK_LIMIT_TICKS = 200;       // 无进展累计上限（10 秒）
+    private static final double STUCK_GOAL_REACH_SQ = 16;   // 目标/中心豁免距离平方（4 格）
+    private final Map<UUID, BlockPos> stuckGoal = new HashMap<>();     // 当前目标（绑定子任务，无则中心）
+    private final Map<UUID, Double> stuckBestDist = new HashMap<>();   // 距目标历史最近距离平方
     private final Map<UUID, Integer> stuckTicks = new HashMap<>();
     private final Set<UUID> stuckRecovery = new HashSet<>();
     private long lastStuckSampleTime = 0;
@@ -946,35 +948,58 @@ public class MineInstance extends ProjectCenterInstance
         if (layerPaused) tryResumeLayer(level);
     }
 
-    // 卡死采样（5 秒一次）：豁免（已在中心旁 / 在绑定子任务旁施工）或本采样周期位移≥1格 → 清零，
-    // 否则累计；达到 10 秒 → 标记一次性通知（行为侧消费后传送并重置导航状态）
+    // 卡死采样（5 秒一次，2026-09-04 修正：位移判定会被水中漂移/浮动反复清零 → 改为"距目标无进展"判定）：
+    //   目标 = 绑定子任务坐标，无绑定则矿井方块；
+    //   离目标 ≤4 格（在施工）或离中心 ≤4 格（存取/待机）→ 正常清零；
+    //   比历史最近距离更近 → 有进展，清零并更新最近值；否则累计，满 10 秒 → 标记一次性通知
     private void sampleStuckMaids(ServerLevel level)
     {
         for (UUID uuid : getMemberIds())
         {
             if (!(level.getEntity(uuid) instanceof EntityMaid maid) || maid.isRemoved())
             {
-                stuckSamplePos.remove(uuid);
-                stuckTicks.remove(uuid);
+                clearStuckSample(uuid);
                 continue;
             }
             BlockPos pos = maid.blockPosition();
-            BlockPos last = stuckSamplePos.put(uuid, pos);
             MineTask bound = layerSubtasks.get(uuid);
-            boolean excused = pos.distSqr(getBlockPos()) <= 16
-                    || (bound != null && pos.distSqr(bound.pos()) <= 16);
-            if (excused || last == null || pos.distSqr(last) >= 1)
+            BlockPos goal = bound != null ? bound.pos() : getBlockPos();
+            double d = pos.distSqr(goal);
+            BlockPos prevGoal = stuckGoal.put(uuid, goal);
+            if (!goal.equals(prevGoal) || d <= STUCK_GOAL_REACH_SQ
+                    || pos.distSqr(getBlockPos()) <= STUCK_GOAL_REACH_SQ)
             {
+                stuckBestDist.put(uuid, d);
                 stuckTicks.remove(uuid);
                 continue;
             }
-            if (stuckTicks.merge(uuid, STUCK_SAMPLE_TICKS, Integer::sum) >= STUCK_LIMIT_TICKS)
+            double best = stuckBestDist.getOrDefault(uuid, Double.MAX_VALUE);
+            if (d < best)
             {
+                stuckBestDist.put(uuid, d);
                 stuckTicks.remove(uuid);
+                continue;
+            }
+            int t = stuckTicks.merge(uuid, STUCK_SAMPLE_TICKS, Integer::sum);
+            if (t == STUCK_SAMPLE_TICKS)
+            {
+                LOGGER.info("[MineDebug] 卡死采样：女仆={} 5秒无进展(距目标{}格, 目标{})",
+                        shortId(uuid), (int) Math.sqrt(d), goal.toShortString());
+            }
+            if (t >= STUCK_LIMIT_TICKS)
+            {
+                clearStuckSample(uuid);
                 stuckRecovery.add(uuid);
-                LOGGER.info("[MineDebug] 女仆={} 卡死熔断(10秒无位移)→通知传送至矿井方块旁", shortId(uuid));
+                LOGGER.info("[MineDebug] 女仆={} 卡死熔断(10秒无进展)→通知传送至矿井方块旁", shortId(uuid));
             }
         }
+    }
+
+    private void clearStuckSample(UUID uuid)
+    {
+        stuckGoal.remove(uuid);
+        stuckBestDist.remove(uuid);
+        stuckTicks.remove(uuid);
     }
 
     // 行为侧消费卡死通知（一次性）
@@ -1061,6 +1086,12 @@ public class MineInstance extends ProjectCenterInstance
             if (satisfiedWhenEmpty)
             {
                 violated = state.isAir();
+            }
+            else if (state.isAir())
+            {
+                // 空置位空气 = 正常（2026-09-04 修正：此前漏判——空气格被当违规反复派发 DESTROY，
+                // 刷屏灌困难表；塞子/被埋方块等"非空气"仍照常违规派发）
+                continue;
             }
             else if (!state.getFluidState().isEmpty())
             {
