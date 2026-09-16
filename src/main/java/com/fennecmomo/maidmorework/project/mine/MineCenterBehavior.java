@@ -54,7 +54,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private static final double WALK_REACH_SQ = 16.0;   // 到达判定距离平方（4格）
     private static final double WALK_SPEED = 0.6;       // 导航速度倍率
     private static final int MAX_NAV_FAIL = 10;         // 导航失败次数上限（熔断：视为到达继续执行，不取消任务）
-    private static final int NAV_STUCK_TICKS = 200;     // 寻路卡死熔断：持续寻路超过 10 秒 → 传送至矿井方块旁（水中游不动等）
+    private static final int NAV_STUCK_TICKS = 200;     // 卡死熔断：无位移且未施工累计 10 秒 → 传送至矿井方块旁（水中游不动等）
+    private static final int MOVE_SAMPLE_TICKS = 20;    // 位移采样间隔（1 秒）
     private static final int FETCH_GROUP = 10;          // B2/B3：取消耗品一次一组（10个）
     private static final int WAIT_TICKS = 40;           // 阻塞等待节流（B2 仓库无货）
     private static final int BUBBLE_COOLDOWN = 120;     // 气泡冷却（tick）
@@ -68,7 +69,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private MineTask currentTask = null;    // 当前任务
     private boolean reachedTarget = false;
     private int navFailCount = 0;
-    private int navStuckTicks = 0;          // 持续寻路计时（卡死熔断用）
+    private int navStuckTicks = 0;          // 卡死累计时间（无位移且未施工，熔断用）
+    private int moveSampleTicks = 0;        // 位移采样节拍（每 20 tick 一次）
+    private BlockPos moveSamplePos = null;  // 上次位移采样位置
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井失联 → 结束行为（挖尽为待机，不结束）
     private boolean exhaustedLogged = false; // 挖尽待机日志与放权只执行一次
@@ -163,6 +166,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         reachedTarget = false;
         navFailCount = 0;
         navStuckTicks = 0;
+        moveSampleTicks = 0;
+        moveSamplePos = null;
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
@@ -183,23 +188,30 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // 寻路卡死熔断（2026-09-04 拍板）：持续处于寻路状态超过 10 秒（水中游不动等）→
-        // 直接传送到矿井方块旁并重置导航状态，避免永远卡住
-        if (maid.getNavigation().isInProgress())
+        // 卡死熔断（2026-09-04 修正：原判定绑 isInProgress，水中 moveTo 反复失败会让计时反复清零）：
+        // 每 20 tick 采样位置——已在中心旁 / 在目标旁正常施工 / 这一秒位移≥1格，任一成立即清零；
+        // 否则累计，超过 10 秒无位移且没干活 → 传送至矿井方块旁并从中心重新寻路
+        if (++moveSampleTicks >= MOVE_SAMPLE_TICKS)
         {
-            if (++navStuckTicks > NAV_STUCK_TICKS)
+            moveSampleTicks = 0;
+            BlockPos now = maid.blockPosition();
+            boolean progressed = isNear(maid, mine.getBlockPos())
+                    || (currentTask != null && reachedTarget && isNear(maid, currentTask.pos()))
+                    || (moveSamplePos != null && now.distSqr(moveSamplePos) >= 1);
+            if (progressed)
             {
                 navStuckTicks = 0;
-                LOGGER.info("[MineDebug] 女仆={} 寻路超时熔断→传送至矿井方块旁", shortId(maid));
+            }
+            else if ((navStuckTicks += MOVE_SAMPLE_TICKS) > NAV_STUCK_TICKS)
+            {
+                navStuckTicks = 0;
+                LOGGER.info("[MineDebug] 女仆={} 卡死熔断(10秒无位移)→传送至矿井方块旁", shortId(maid));
                 teleportNearMine(level, maid, mine);
                 reachedTarget = false;
                 navFailCount = 0;
                 return;
             }
-        }
-        else
-        {
-            navStuckTicks = 0;
+            moveSamplePos = now;
         }
 
         if (mine.isExhausted())
@@ -1301,6 +1313,8 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         reachedTarget = false;
         navFailCount = 0;
         navStuckTicks = 0;
+        moveSampleTicks = 0;
+        moveSamplePos = null;
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
