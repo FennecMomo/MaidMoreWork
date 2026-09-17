@@ -1,5 +1,6 @@
 {
   "block.maidmorework.mine_center": "矿井中心",
+  "block.maidmorework.mine_layer_control": "矿道层控制方块",
   "item.maidmorework.mine_center_marker": "矿井标记工具",
   "item.maidmorework.fluid_bottle": "液体瓶",
   "item.maidmorework.fluid_bottle.empty": "空瓶",

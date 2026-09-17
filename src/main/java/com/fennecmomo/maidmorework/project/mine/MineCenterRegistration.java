@@ -48,6 +48,26 @@ public class MineCenterRegistration
                     () -> new BlockEntityType<>(MineCenterBlockEntity::new,
                             MINE_CENTER_BLOCK.get()));
 
+    // 矿道层控制方块（2026-09-04 拍板）：表示该层矿道的控制中心
+    //   非合成物品、无掉落、生存不可破坏（创造可破坏）；由女仆空手放置；随矿井中心移除而销毁
+    public static final DeferredHolder<Block, MineLayerControlBlock> MINE_LAYER_CONTROL_BLOCK =
+            BLOCKS.registerBlock("mine_layer_control",
+                    properties -> new MineLayerControlBlock(properties),
+                    p -> p.noOcclusion()
+                            .instabreak()
+                            .strength(-1.0F)
+                            .noLootTable()
+                            .pushReaction(net.minecraft.world.level.material.PushReaction.BLOCK)
+            );
+
+    public static final DeferredHolder<Item, BlockItem> MINE_LAYER_CONTROL_BLOCK_ITEM =
+            ITEMS.registerSimpleBlockItem(MINE_LAYER_CONTROL_BLOCK);
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<MineLayerControlBlockEntity>> MINE_LAYER_CONTROL_BLOCK_ENTITY =
+            BLOCK_ENTITIES.register("mine_layer_control",
+                    () -> new BlockEntityType<>(MineLayerControlBlockEntity::new,
+                            MINE_LAYER_CONTROL_BLOCK.get()));
+
     // 矿井标记工具（不可堆叠）
     public static final DeferredHolder<Item, MineCenterMarkerItem> MINE_CENTER_MARKER =
             ITEMS.register("mine_center_marker",

@@ -1,5 +1,6 @@
 {
   "block.maidmorework.mine_center": "Mine Center",
+  "block.maidmorework.mine_layer_control": "Mine Layer Control",
   "item.maidmorework.mine_center_marker": "Mine Center Marker Tool",
   "item.maidmorework.fluid_bottle": "Fluid Bottle",
   "item.maidmorework.fluid_bottle.empty": "Empty Bottle",
