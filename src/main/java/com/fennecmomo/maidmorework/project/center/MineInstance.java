@@ -1,5 +1,6 @@
 package com.fennecmomo.maidmorework.project.center;
 
+import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
 import com.fennecmomo.maidmorework.project.mine.MineTask;
 import com.fennecmomo.maidmorework.project.mine.SpiralMinePlanner;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
@@ -70,6 +71,8 @@ public class MineInstance extends ProjectCenterInstance
                     .forGetter(c -> new ArrayList<>(c.sealedSolid)),
             BlockPos.CODEC.listOf().optionalFieldOf("sealedLights", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedLights)),
+            BlockPos.CODEC.listOf().optionalFieldOf("sealedControls", List.of())
+                    .forGetter(c -> new ArrayList<>(c.sealedControls)),
             Codec.STRING.listOf().optionalFieldOf("missingTools", List.of())
                     .forGetter(c -> new ArrayList<>(c.missingToolNotes))
         ).apply(inst, MineInstance::fromCodec));
@@ -80,10 +83,11 @@ public class MineInstance extends ProjectCenterInstance
                                           boolean exhausted, int cycle, int layerIndex,
                                           List<MineTask> mineHardTasks,
                                           List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                                          List<BlockPos> sealedLights, List<String> missingToolNotes)
+                                          List<BlockPos> sealedLights, List<BlockPos> sealedControls,
+                                          List<String> missingToolNotes)
     {
         return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex,
-                mineHardTasks, sealedAir, sealedSolid, sealedLights, missingToolNotes);
+                mineHardTasks, sealedAir, sealedSolid, sealedLights, sealedControls, missingToolNotes);
     }
 
     // 扁平组合的 forGetter 引：把矿井实例视作基类交给基类 Codec 编解码
@@ -112,6 +116,7 @@ public class MineInstance extends ProjectCenterInstance
     private final List<Integer> cycleLayerYs = new ArrayList<>();
     private final Map<Integer, Set<BlockPos>> cycleKeeps = new HashMap<>();
     private final Map<Integer, Set<BlockPos>> cycleLights = new HashMap<>();
+    private final Map<Integer, BlockPos> cycleControls = new HashMap<>();   // 层 Y → 该层矿道控制方块位
 
     // 当前层运行时状态（不持久化，实时方块状态即进度真相）
     private final Set<BlockPos> layerProcessed = new HashSet<>();
@@ -127,9 +132,11 @@ public class MineInstance extends ProjectCenterInstance
     // 封存列表（2026-09-04 拍板）：女仆完成一格即按动作分类封存
     //   空置封存 = 记录为空的位置不能有方块；实体封存 = 记录为实体的位置不能是空的；
     //   光源位封存 = 记录为灯位的位置不能是空的（灯被打掉 → 重派 SETLIGHT，而非补垫脚）
+    //   控制位封存 = 记录为矿道层控制方块的位置（方块被挖掉 → 重派 PLACE_CONTROL；随矿井中心销毁）
     private final List<BlockPos> sealedAir = new ArrayList<>();
     private final List<BlockPos> sealedSolid = new ArrayList<>();
     private final List<BlockPos> sealedLights = new ArrayList<>();
+    private final List<BlockPos> sealedControls = new ArrayList<>();
 
     // 10s 记录位置检查（分片轮询，游标不持久化）
     private static final int REFRESH_INTERVAL_TICKS = 200;  // 10 秒
@@ -138,6 +145,7 @@ public class MineInstance extends ProjectCenterInstance
     private int airCursor = 0;
     private int solidCursor = 0;
     private int lightCursor = 0;
+    private int controlCursor = 0;
 
     // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
     // 女仆距目标无进展累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
@@ -183,7 +191,8 @@ public class MineInstance extends ProjectCenterInstance
                          boolean exhausted, int cycle, int layerIndex,
                          List<MineTask> mineHardTasks,
                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                         List<BlockPos> sealedLights, List<String> missingToolNotes)
+                         List<BlockPos> sealedLights, List<BlockPos> sealedControls,
+                         List<String> missingToolNotes)
     {
         super(base);
         this.shaftCornerNW = shaftCornerNW;
@@ -195,6 +204,7 @@ public class MineInstance extends ProjectCenterInstance
         this.sealedAir.addAll(sealedAir);
         this.sealedSolid.addAll(sealedSolid);
         this.sealedLights.addAll(sealedLights);
+        this.sealedControls.addAll(sealedControls);
         this.missingToolNotes.addAll(missingToolNotes);
     }
 
@@ -344,6 +354,14 @@ public class MineInstance extends ProjectCenterInstance
             if (platformKeeps.isEmpty()) continue;
             int h = platformKeeps.get(0).getY();
             Set<BlockPos> lights = cycleLights.computeIfAbsent(h, key -> new HashSet<>());
+            // 矿道层控制方块位（2026-09-04 拍板）：平台"中心列 × 贴墙行"，即灯2 正下方 3 格
+            switch (edge)
+            {
+                case 0 -> cycleControls.put(h, new BlockPos(cx, h, p.getMinZ()));
+                case 1 -> cycleControls.put(h, new BlockPos(p.getMinX(), h, cz));
+                case 2 -> cycleControls.put(h, new BlockPos(cx, h, p.getMaxZ()));
+                case 3 -> cycleControls.put(h, new BlockPos(p.getMaxX(), h, cz));
+            }
             switch (edge)
             {
                 case 0 -> // 北边：平台行 z=minZ..minZ+1，墙在 minZ-1
@@ -571,6 +589,16 @@ public class MineInstance extends ProjectCenterInstance
             return lightTask;
         }
 
+        // 2.5 矿道层控制方块（2026-09-04 拍板）：光源工序完成后，女仆空手放置该层控制方块
+        MineTask controlTask = nearestControlTask(level, y);
+        if (controlTask != null)
+        {
+            layerSubtasks.put(maid.getUUID(), controlTask);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {} @ {}", shortId(maid.getUUID()),
+                    controlTask.type(), controlTask.pos().toShortString());
+            return controlTask;
+        }
+
         // 3. 层完成结算：他人在干 → 让位等待（§3）；无人干活 → 等 2 秒复核（D1 终版：
         //    掉落物落网期间派发扫描实时重判，2 秒后池子仍空才推进下一层）
         if (!layerSubtasks.isEmpty()) return null;
@@ -633,19 +661,21 @@ public class MineInstance extends ProjectCenterInstance
                 sealAs(task.pos(), isKeepPosition(task.pos()) ? sealedSolid : sealedAir);
             }
             case SETLIGHT -> sealAs(task.pos(), sealedLights);
+            case PLACE_CONTROL -> sealAs(task.pos(), sealedControls);
             default -> { }
         }
         // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
     }
 
-    // 封存坐标：先清三张封存列表中的旧记录（同一格重分类时移动），再按类别入表
+    // 封存坐标：先清四张封存列表中的旧记录（同一格重分类时移动），再按类别入表
     private void sealAs(BlockPos pos, List<BlockPos> target)
     {
         BlockPos immutable = pos.immutable();
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
         sealedLights.remove(immutable);
+        sealedControls.remove(immutable);
         target.add(immutable);
     }
 
@@ -680,12 +710,14 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos pos = task.pos();
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
-            // 已解决判定按任务类型：DESTROY→空气；FILL→非空气；SETLIGHT→该格有光源
+            // 已解决判定按任务类型：DESTROY→空气；FILL→非空气；SETLIGHT→该格有光源；
+            // PLACE_CONTROL→该格是控制方块
             // （2026-09-04 修正：SETLIGHT 的空气恰恰是"未解决"，沿用 default 会把任务秒删、永不派发）
             boolean solved = switch (task.type())
             {
                 case FILL -> !state.isAir();
                 case SETLIGHT -> state.getLightEmission() > 0;
+                case PLACE_CONTROL -> state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get();
                 default -> state.isAir();
             };
             if (solved)
@@ -693,9 +725,11 @@ public class MineInstance extends ProjectCenterInstance
                 satisfied.add(task);
                 continue;
             }
-            // 基岩类 DESTROY 永远无法派发，留表
-            if (task.type() != MineTask.Type.FILL && state.getDestroySpeed(level, pos) < 0) continue;
-            if (!isProcessableBy(level, pos, state, maid)) continue;
+            // 基岩类 DESTROY 永远无法派发，留表（FILL/PLACE_CONTROL 非挖掘任务不受此限）
+            if (task.type() != MineTask.Type.FILL && task.type() != MineTask.Type.PLACE_CONTROL
+                    && state.getDestroySpeed(level, pos) < 0) continue;
+            // 控制方块为空手放置，无工具可行性要求
+            if (task.type() != MineTask.Type.PLACE_CONTROL && !isProcessableBy(level, pos, state, maid)) continue;
             double dist = pos.distSqr(maid.blockPosition());
             if (dist < bestDist)
             {
@@ -745,6 +779,18 @@ public class MineInstance extends ProjectCenterInstance
         if (best == null) return null;
         return new MineTask(hasLightSource(maid) ? best : getBlockPos(),
                 hasLightSource(maid) ? MineTask.Type.SETLIGHT : MineTask.Type.FETCH_LIGHT);
+    }
+
+    // 矿道层控制方块工序（2026-09-04 拍板）：该层有控制位且格上还不是控制方块 → PLACE_CONTROL
+    // （空手生成放置：无物品、无取货、不存在缺货）
+    private MineTask nearestControlTask(ServerLevel level, int y)
+    {
+        BlockPos pos = cycleControls.get(y);
+        if (pos == null) return null;
+        if (!level.isLoaded(pos)) return null;
+        if (isClaimed(pos)) return null;
+        if (level.getBlockState(pos).getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) return null;
+        return new MineTask(pos, MineTask.Type.PLACE_CONTROL);
     }
 
     // 光源判定（B2 拍板 2026-09-04 修正：只认火把——灯笼无法贴墙挂放，待后续单独立项支持）
@@ -899,12 +945,13 @@ public class MineInstance extends ProjectCenterInstance
             cycleLayerYs.clear();
             cycleKeeps.clear();
             cycleLights.clear();
+            cycleControls.clear();
             ensureCycleComputed(level);
         }
     }
 
     // 结算封存对齐（2026-09-04 拍板）：以当前周期规划器的保留区为真相，
-    // 重核本层区域所有格子的封存类别（灯位→光源封存、保留格→实体封存、非保留格→空置封存），
+    // 重核本层区域所有格子的封存类别（控制位→控制封存、灯位→光源封存、保留格→实体封存、非保留格→空置封存），
     // 修正历史误分类（如楼梯格被标"应空"导致 10s 检查误拆楼梯）
     private void reconcileLayerSeals()
     {
@@ -912,12 +959,14 @@ public class MineInstance extends ProjectCenterInstance
         int y = cycleLayerYs.get(layerIndex);
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
+        BlockPos control = cycleControls.get(y);
         for (int x = p.getMinX() - 1; x <= p.getMaxX() + 1; x++)
         {
             for (int z = p.getMinZ() - 1; z <= p.getMaxZ() + 1; z++)
             {
                 BlockPos pos = new BlockPos(x, y, z);
-                if (lights.contains(pos)) sealAs(pos, sealedLights);
+                if (pos.equals(control)) sealAs(pos, sealedControls);
+                else if (lights.contains(pos)) sealAs(pos, sealedLights);
                 else if (keeps.contains(pos)) sealAs(pos, sealedSolid);
                 else sealAs(pos, sealedAir);
             }
@@ -1177,6 +1226,43 @@ public class MineInstance extends ProjectCenterInstance
         solidCursor = solidEnd;
         int lightEnd = checkSealedSlice(level, sealedLights, lightCursor, MineTask.Type.SETLIGHT, true);
         lightCursor = lightEnd;
+        int controlEnd = checkControlSlice(level, controlCursor);
+        controlCursor = controlEnd;
+    }
+
+    // 控制位验证线（2026-09-04 拍板，与光源线同款）：格上不是矿道层控制方块 → 重派 PLACE_CONTROL
+    // （常规状态不存在被挖；覆盖创造模式挖除与意外破坏）
+    private int checkControlSlice(ServerLevel level, int cursor)
+    {
+        if (sealedControls.isEmpty()) return 0;
+        if (cursor >= sealedControls.size()) cursor = 0;
+        int end = Math.min(sealedControls.size(), cursor + REFRESH_SLICE);
+        for (int i = cursor; i < end; i++)
+        {
+            BlockPos pos = sealedControls.get(i);
+            if (!level.isLoaded(pos)) continue;
+            BlockState state = level.getBlockState(pos);
+            if (state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) continue;
+            LOGGER.info("[MineDebug] 10s检查违规 PLACE_CONTROL @ {} 实际={}", pos.toShortString(),
+                    state.isAir() ? "空气" : state.getBlock().getName().getString());
+            addHardTask(new MineTask(pos.immutable(), MineTask.Type.PLACE_CONTROL));
+        }
+        return end >= sealedControls.size() ? 0 : end;
+    }
+
+    // 矿井中心移除时销毁所有绑定的矿道层控制方块（2026-09-04 拍板；在实例注销前由 deleteById 调用）
+    public void destroyControlBlocks(ServerLevel level)
+    {
+        int removed = 0;
+        for (BlockPos pos : sealedControls)
+        {
+            if (!level.isLoaded(pos)) continue;
+            if (level.getBlockState(pos).getBlock() != MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) continue;
+            level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
+            removed++;
+        }
+        LOGGER.info("[MineDebug] 矿井中心移除：销毁 {} 个矿道层控制方块（记录 {} 条）",
+                removed, sealedControls.size());
     }
 
     // 检查一段封存列表并推进游标；satisfiedWhenEmpty=true → "为空"算违规（实体/灯位）；false → "非空"算违规（空置）

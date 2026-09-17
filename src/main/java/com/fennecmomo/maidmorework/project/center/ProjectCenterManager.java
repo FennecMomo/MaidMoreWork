@@ -200,6 +200,12 @@ public final class ProjectCenterManager
         ProjectCenterInstance removed = e.byId().remove(id);
         if (removed == null) return;
 
+        // 矿道层控制方块随矿井中心销毁（2026-09-04 拍板）
+        if (removed instanceof MineInstance mine)
+        {
+            mine.destroyControlBlocks(level);
+        }
+
         for (ProjectBase p : new ArrayList<>(removed.getManagedProjects()))
         {
             unregisterProject(p.getId());

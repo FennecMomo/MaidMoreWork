@@ -24,6 +24,7 @@ public record MineTask(BlockPos pos, Type type)
         FILL,
         REPLACE,
         SETLIGHT,
-        FETCH_LIGHT
+        FETCH_LIGHT,
+        PLACE_CONTROL
     }
 }
