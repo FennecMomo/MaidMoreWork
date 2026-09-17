@@ -932,6 +932,7 @@ public class MineInstance extends ProjectCenterInstance
     {
         super.tick(level);
         long now = level.getGameTime();
+        rescueBuriedMaids(level);
         if (lastStuckSampleTime == 0) lastStuckSampleTime = now;
         if (now - lastStuckSampleTime >= STUCK_SAMPLE_TICKS)
         {
@@ -1062,6 +1063,60 @@ public class MineInstance extends ProjectCenterInstance
     public boolean consumeStuckRecovery(UUID uuid)
     {
         return stuckRecovery.remove(uuid);
+    }
+
+    // ===================== 被埋救援（2026-09-04 拍板） =====================
+
+    // 女仆被方块埋住 → 原版每 tick 扣窒息伤害，几秒即死；矿井侧每 tick 检测（状态绝对稳定），
+    // 发现即就近传送到安全落点（找不到退矿井方块旁安全点）
+    private void rescueBuriedMaids(ServerLevel level)
+    {
+        if (getMemberIds().isEmpty()) return;
+        for (UUID uuid : getMemberIds())
+        {
+            if (!(level.getEntity(uuid) instanceof EntityMaid maid) || maid.isRemoved() || !maid.isAlive())
+            {
+                continue;
+            }
+            if (!maid.isInWall()) continue;
+            BlockPos safe = findSafeSpot(level, maid.blockPosition());
+            if (safe == null) safe = mineSafeSpot(level);
+            if (safe == null) continue;
+            maid.getNavigation().stop();
+            maid.teleportTo(safe.getX() + 0.5, safe.getY(), safe.getZ() + 0.5);
+            LOGGER.info("[MineDebug] 被埋救援：女仆={} → {}", shortId(uuid), safe.toShortString());
+        }
+    }
+
+    // 就近安全落点：半径 3 内找"可站立"（空气 + 下方实体）格；找不到返回 null
+    private static BlockPos findSafeSpot(ServerLevel level, BlockPos center)
+    {
+        for (int r = 1; r <= 3; r++)
+        {
+            for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -1, -r), center.offset(r, r + 1, r)))
+            {
+                if (!level.getBlockState(p).isAir()) continue;
+                if (!level.getBlockState(p.below()).isSolid()) continue;
+                return p.immutable();
+            }
+        }
+        return null;
+    }
+
+    // 矿井方块旁安全落点（口径同行为侧 teleportNearMine）
+    private BlockPos mineSafeSpot(ServerLevel level)
+    {
+        BlockPos base = getBlockPos();
+        for (BlockPos cand : new BlockPos[]{
+                base.above(), base.above(2),
+                base.north(), base.south(), base.east(), base.west()})
+        {
+            if (level.getBlockState(cand).isAir() && level.getBlockState(cand.below()).isSolid())
+            {
+                return cand;
+            }
+        }
+        return base.above();
     }
 
     // 暂停层 10s 重判：可处理比例回落到阈值内 → 自动恢复（工具来源=仓库+在场女仆）
