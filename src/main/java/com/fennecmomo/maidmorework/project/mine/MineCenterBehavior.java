@@ -451,6 +451,18 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                     waitTicks = WAIT_TICKS;                  // 背包也满了 → 缓一缓（下轮触发存矿）
                 }
             }
+
+            // === PLACE_CONTROL：空手生成矿道层控制方块（2026-09-04 拍板：非物品、无消耗） ===
+            case PLACE_CONTROL ->
+            {
+                if (state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get())
+                {
+                    finishTask(mine, maid, task);            // 已是控制方块（含创造模式挖除后的重派）
+                    return;
+                }
+                placeLayerControl(level, maid, mine, target);
+                finishTask(mine, maid, task);
+            }
         }
     }
 
@@ -1012,6 +1024,33 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return true;
         }
         return false;
+    }
+
+    // 放置矿道层控制方块（2026-09-04 拍板：空手生成、无物品消耗）：
+    // 覆盖原垫脚方块（掉落物回收进女仆背包，塞不下落地），并给方块实体写入所属矿井 UUID
+    private void placeLayerControl(ServerLevel level, EntityMaid maid, MineInstance mine, BlockPos target)
+    {
+        BlockState old = level.getBlockState(target);
+        if (!old.isAir())
+        {
+            List<ItemStack> drops = Block.getDrops(old, level, target,
+                    level.getBlockEntity(target), maid, maid.getMainHandItem());
+            for (ItemStack drop : drops)
+            {
+                if (drop.isEmpty()) continue;
+                ItemStack leftover = addToInventory(maid, drop);
+                if (!leftover.isEmpty())
+                {
+                    Block.popResource(level, target, leftover);
+                }
+            }
+        }
+        level.setBlock(target, MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get().defaultBlockState(), 3);
+        if (level.getBlockEntity(target) instanceof MineLayerControlBlockEntity be)
+        {
+            be.bind(mine.getId());
+        }
+        LOGGER.info("[MineDebug] 女仆={} 放置矿道层控制方块 @ {}", shortId(maid), target.toShortString());
     }
 
     // 放置光源（2026-09-04 拍板：只认火把；朝向按灯位几何推算支撑墙）
