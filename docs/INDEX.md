@@ -9,6 +9,7 @@ Touhou Little Maid 扩展模组，为女仆新增伐木和采矿两种工作类�
 | 文档 | 说明 |
 |------|------|
 | [API.md](API.md) | 公开 API 参考：SearchBehavior、MaidBubbleHelper、ProjectServerHelper/ProjectClientHelper、Project 体系等 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本更新记录（仅作者明确要求时记录） |
 
 ### 开发管理
 | 文档 | 说明 |
