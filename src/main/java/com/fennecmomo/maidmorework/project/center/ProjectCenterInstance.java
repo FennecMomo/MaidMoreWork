@@ -609,6 +609,12 @@ public class ProjectCenterInstance
         return savedHomes.keySet();
     }
 
+    // 移除成员（女仆实体已不存在、无法走 leaveCenter 时的兜底清理）
+    public void forgetMember(UUID uuid)
+    {
+        savedHomes.remove(uuid);
+    }
+
     // ===================== 通用仓库（A1 拍板：全中心通用的"工程临时仓库"） =====================
 
     public List<ItemStack> getWarehouse()

@@ -148,6 +148,7 @@ public class MineInstance extends ProjectCenterInstance
     private final Map<UUID, Double> stuckBestDist = new HashMap<>();   // 距目标历史最近距离平方
     private final Map<UUID, Integer> stuckTicks = new HashMap<>();
     private final Set<UUID> stuckRecovery = new HashSet<>();
+    private final Map<UUID, Integer> absentSamples = new HashMap<>();  // 绑定女仆失联采样计数（活跃任务熔断兜底）
     private long lastStuckSampleTime = 0;
 
     // 层结算复核等待（2 秒，2026-09-04 拍板：层清空后等掉落物落网再推进）
@@ -936,6 +937,7 @@ public class MineInstance extends ProjectCenterInstance
         {
             lastStuckSampleTime = now;
             sampleStuckMaids(level);
+            sweepLostBoundMaids(level);
         }
         if (lastRefreshGameTime == 0)
         {
@@ -1000,6 +1002,60 @@ public class MineInstance extends ProjectCenterInstance
         stuckGoal.remove(uuid);
         stuckBestDist.remove(uuid);
         stuckTicks.remove(uuid);
+    }
+
+    // ===================== 活跃任务熔断（2026-09-04 拍板） =====================
+
+    // 成员死亡处理（死亡事件入口）：归还绑定任务；成员资格由调用方 leaveCenter 处理
+    public void handleMemberLost(EntityMaid maid)
+    {
+        UUID uuid = maid.getUUID();
+        MineTask task = releaseBoundTask(uuid);
+        LOGGER.info("[MineDebug] 任务归还：女仆={} 死亡 任务={}", shortId(uuid),
+                task == null ? "无" : task.type() + " @ " + task.pos().toShortString());
+    }
+
+    // 兜底巡检（每 5 秒，随卡死采样）：绑定女仆实体不存在（区块卸载/被移除）→ 连续 2 次采样（10 秒）
+    // 归还任务；实体在场但已死 → 立即归还并移出成员表。失联只归还任务不除名（可能只是区块卸载）
+    private void sweepLostBoundMaids(ServerLevel level)
+    {
+        if (layerSubtasks.isEmpty()) return;
+        for (UUID uuid : new ArrayList<>(layerSubtasks.keySet()))
+        {
+            if (level.getEntity(uuid) instanceof EntityMaid maid && !maid.isRemoved())
+            {
+                absentSamples.remove(uuid);
+                if (!maid.isAlive())
+                {
+                    MineTask task = releaseBoundTask(uuid);
+                    forgetMember(uuid);
+                    LOGGER.info("[MineDebug] 任务归还：女仆={} 已死亡 任务={}", shortId(uuid),
+                            task == null ? "无" : task.type() + " @ " + task.pos().toShortString());
+                }
+                continue;
+            }
+            if (absentSamples.merge(uuid, 1, Integer::sum) >= 2)
+            {
+                MineTask task = releaseBoundTask(uuid);
+                LOGGER.info("[MineDebug] 任务归还：女仆={} 失联(实体不存在) 任务={}", shortId(uuid),
+                        task == null ? "无" : task.type() + " @ " + task.pos().toShortString());
+            }
+        }
+    }
+
+    // 解绑单个任务：困难表来源的坐标任务回表（取灯任务除外，坐标池会重新派生）；
+    // 同时清理该女仆的采样/通知/失联计数
+    private MineTask releaseBoundTask(UUID uuid)
+    {
+        MineTask task = layerSubtasks.remove(uuid);
+        if (task != null && task.type() != MineTask.Type.FETCH_LIGHT)
+        {
+            addHardTask(task);
+        }
+        clearStuckSample(uuid);
+        stuckRecovery.remove(uuid);
+        absentSamples.remove(uuid);
+        return task;
     }
 
     // 行为侧消费卡死通知（一次性）
