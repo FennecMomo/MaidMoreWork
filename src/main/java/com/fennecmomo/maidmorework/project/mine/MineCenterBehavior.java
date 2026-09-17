@@ -11,6 +11,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -24,6 +25,7 @@ import net.minecraft.world.level.block.WallTorchBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
@@ -67,6 +69,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private MineTask currentTask = null;    // 当前任务
     private boolean reachedTarget = false;
     private int navFailCount = 0;
+    private long waterLogTick = 0;          // 水中诊断：上次打印时间（2026-09-04 临时接入）
+    private int navIssueWindow = 0;         // 水中诊断：窗口内 moveTo 下发次数
+    private int navFailWindow = 0;          // 水中诊断：窗口内 moveTo 失败次数
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井失联 → 结束行为（挖尽为待机，不结束）
     private boolean exhaustedLogged = false; // 挖尽待机日志与放权只执行一次
@@ -179,6 +184,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             logTransition(maid, "结束", "矿井失联");
             return;
         }
+
+        // 水中抖动诊断（2026-09-04 临时接入：定位抖动源后移除）
+        logWaterDiagnostic(level, maid);
 
         // 卡死熔断（2026-09-04 拍板：采样由矿井侧承担——每 5 秒一次，只有矿井方块状态绝对稳定）：
         // 矿井判定"10 秒无位移且未施工"后下发一次性通知，此处传送并重置导航状态，从中心重新寻路
@@ -814,10 +822,12 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
         if (!maid.getNavigation().isInProgress())
         {
+            navIssueWindow++;
             BlockPos walkTarget = findWalkTarget(level, target);
             if (walkTarget == null)
             {
                 navFailCount++;
+                navFailWindow++;
                 if (navFailCount >= MAX_NAV_FAIL || distSq < 25.0)
                 {
                     LOGGER.info("[MineDebug] 女仆={} 导航熔断→视为到达 @ {}",
@@ -836,6 +846,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             else
             {
                 navFailCount++;
+                navFailWindow++;
                 if (navFailCount >= MAX_NAV_FAIL || distSq < 25.0)
                 {
                     LOGGER.info("[MineDebug] 女仆={} 导航熔断→视为到达 @ {}",
@@ -845,6 +856,39 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
         }
+    }
+
+    // 水中抖动诊断（2026-09-04 临时接入：定位抖动源后移除）
+    // 每秒一条：位置/三轴速度（抖幅）、水深/游泳/姿态、当前导航对象类名（看 TLM 是否在换导航）、
+    // TLM 游泳系统状态（wantToSwim/isGoingToBreath/isReadyToLand/泳目标）、
+    // 我方 moveTo 窗口统计（下发/失败次数）
+    private void logWaterDiagnostic(ServerLevel level, EntityMaid maid)
+    {
+        if (!maid.isInWater())
+        {
+            navIssueWindow = 0;
+            navFailWindow = 0;
+            return;
+        }
+        long now = level.getGameTime();
+        if (now - waterLogTick < 20) return;
+        waterLogTick = now;
+        var swim = maid.getSwimManager();
+        Vec3 vel = maid.getDeltaMovement();
+        LOGGER.info("[MineDebug] 水中诊断 女仆={} pos={} vel=({}, {}, {}) 水深={} 游泳={} pose={} "
+                        + "导航={} 导航中={} 水面={} 泳态[want={} breath={} land={} target={}] "
+                        + "moveTo窗口[下发={} 失败={}] 到达={} 任务={}",
+                shortId(maid), maid.blockPosition().toShortString(),
+                String.format("%.3f", vel.x), String.format("%.3f", vel.y), String.format("%.3f", vel.z),
+                String.format("%.2f", maid.getFluidHeight(FluidTags.WATER)),
+                maid.isSwimming(), maid.getPose(),
+                maid.getNavigation().getClass().getSimpleName(), maid.getNavigation().isInProgress(),
+                maid.getNavigationManager().isWaterSurface(maid.blockPosition()),
+                swim.wantToSwim(), swim.isGoingToBreath(), swim.isReadyToLand(), swim.getSwimTarget(),
+                navIssueWindow, navFailWindow, reachedTarget,
+                currentTask == null ? "无" : currentTask.type() + "@" + currentTask.pos().toShortString());
+        navIssueWindow = 0;
+        navFailWindow = 0;
     }
 
     private boolean isNear(EntityMaid maid, BlockPos pos)
