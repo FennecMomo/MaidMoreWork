@@ -4,6 +4,7 @@ import com.fennecmomo.maidmorework.project.ProjectBase;
 import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
 import com.fennecmomo.maidmorework.project.mine.MineShaftProject;
 import com.fennecmomo.maidmorework.project.mine.MineTask;
+import com.fennecmomo.maidmorework.project.mine.MineTunnelProject;
 import com.fennecmomo.maidmorework.project.mine.SpiralMinePlanner;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.mojang.serialization.Codec;
@@ -55,6 +56,23 @@ public class MineInstance extends ProjectCenterInstance
     {
         return uuid.toString().substring(0, 8);
     }
+
+    // 控制方块封存记录（2026-09-04 拍板：带周期/层/边，矿道工程跨周期恢复靠它）
+    public record ControlEntry(BlockPos pos, int cycle, int layerY, int edge)
+    {
+        public static final Codec<ControlEntry> CODEC = RecordCodecBuilder.create(inst -> inst.group(
+                BlockPos.CODEC.fieldOf("pos").forGetter(ControlEntry::pos),
+                Codec.INT.fieldOf("cycle").forGetter(ControlEntry::cycle),
+                Codec.INT.fieldOf("layerY").forGetter(ControlEntry::layerY),
+                Codec.INT.fieldOf("edge").forGetter(ControlEntry::edge)
+        ).apply(inst, ControlEntry::new));
+    }
+
+    // 当前周期控制位元数据（层 Y → 控制方块位置 + 边号）
+    private record ControlMeta(BlockPos pos, int edge) { }
+
+    // 矿道几何：挖格（两层）+ 地板维护格
+    private record TunnelPlan(Set<BlockPos> dig, Set<BlockPos> floor) { }
     // ===================== 多态序列化 =====================
 
     public static final MapCodec<MineInstance> MAP_CODEC =
@@ -73,7 +91,7 @@ public class MineInstance extends ProjectCenterInstance
                     .forGetter(c -> new ArrayList<>(c.sealedSolid)),
             BlockPos.CODEC.listOf().optionalFieldOf("sealedLights", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedLights)),
-            BlockPos.CODEC.listOf().optionalFieldOf("sealedControls", List.of())
+            ControlEntry.CODEC.listOf().optionalFieldOf("sealedControlRefs", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedControls)),
             Codec.STRING.listOf().optionalFieldOf("missingTools", List.of())
                     .forGetter(c -> new ArrayList<>(c.missingToolNotes))
@@ -85,7 +103,7 @@ public class MineInstance extends ProjectCenterInstance
                                           boolean exhausted, int cycle, int layerIndex,
                                           List<MineTask> mineHardTasks,
                                           List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                                          List<BlockPos> sealedLights, List<BlockPos> sealedControls,
+                                          List<BlockPos> sealedLights, List<ControlEntry> sealedControls,
                                           List<String> missingToolNotes)
     {
         return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex,
@@ -118,7 +136,7 @@ public class MineInstance extends ProjectCenterInstance
     private final List<Integer> cycleLayerYs = new ArrayList<>();
     private final Map<Integer, Set<BlockPos>> cycleKeeps = new HashMap<>();
     private final Map<Integer, Set<BlockPos>> cycleLights = new HashMap<>();
-    private final Map<Integer, BlockPos> cycleControls = new HashMap<>();   // 层 Y → 该层矿道控制方块位
+    private final Map<Integer, ControlMeta> cycleControls = new HashMap<>();   // 层 Y → 该层矿道控制方块位
 
     // 当前层运行时状态（不持久化，实时方块状态即进度真相）
     private final Set<BlockPos> layerProcessed = new HashSet<>();
@@ -138,7 +156,10 @@ public class MineInstance extends ProjectCenterInstance
     private final List<BlockPos> sealedAir = new ArrayList<>();
     private final List<BlockPos> sealedSolid = new ArrayList<>();
     private final List<BlockPos> sealedLights = new ArrayList<>();
-    private final List<BlockPos> sealedControls = new ArrayList<>();
+    private final List<ControlEntry> sealedControls = new ArrayList<>();
+
+    // 矿道完工缓存（控制方块位置 → 已挖完；避免每次找活重复扫描已完成矿道）
+    private final Set<BlockPos> tunnelDone = new HashSet<>();
 
     // 10s 记录位置检查（分片轮询，游标不持久化）
     private static final int REFRESH_INTERVAL_TICKS = 200;  // 10 秒
@@ -193,7 +214,7 @@ public class MineInstance extends ProjectCenterInstance
                          boolean exhausted, int cycle, int layerIndex,
                          List<MineTask> mineHardTasks,
                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                         List<BlockPos> sealedLights, List<BlockPos> sealedControls,
+                         List<BlockPos> sealedLights, List<ControlEntry> sealedControls,
                          List<String> missingToolNotes)
     {
         super(base);
@@ -359,10 +380,10 @@ public class MineInstance extends ProjectCenterInstance
             // 矿道层控制方块位（2026-09-04 拍板）：平台"中心列 × 贴墙行"，即灯2 正下方 3 格
             switch (edge)
             {
-                case 0 -> cycleControls.put(h, new BlockPos(cx, h, p.getMinZ()));
-                case 1 -> cycleControls.put(h, new BlockPos(p.getMinX(), h, cz));
-                case 2 -> cycleControls.put(h, new BlockPos(cx, h, p.getMaxZ()));
-                case 3 -> cycleControls.put(h, new BlockPos(p.getMaxX(), h, cz));
+                case 0 -> cycleControls.put(h, new ControlMeta(new BlockPos(cx, h, p.getMinZ()), 0));
+                case 1 -> cycleControls.put(h, new ControlMeta(new BlockPos(p.getMinX(), h, cz), 1));
+                case 2 -> cycleControls.put(h, new ControlMeta(new BlockPos(cx, h, p.getMaxZ()), 2));
+                case 3 -> cycleControls.put(h, new ControlMeta(new BlockPos(p.getMaxX(), h, cz), 3));
             }
             switch (edge)
             {
@@ -428,34 +449,90 @@ public class MineInstance extends ProjectCenterInstance
         }
     }
 
-    // ===================== 派活口（B1 拍板：中心决定"下一个坐标"） =====================
-
     // ===================== 工程制派活（2026-09-04 拍板：竖井层/矿道都是工程） =====================
 
-    // 竖井层工程解析：已有分配且对应当前层 → 继续；否则加入现有当前层工程；没有则新建
-    // 返回 null = 不可派（层已到深度底/满员异常）
-    private MineShaftProject resolveShaftProject(ServerLevel level, EntityMaid maid, int y)
+    // 工程解析：恢复手头工程；否则在"可加入/可新建"的候选里随机挑一个
+    // 候选 = 当前层竖井工程（不存在则可新建，y 非法时关闭） + 现有未完成矿道工程（有空位）
+    //        + 未挖完且无在飞工程的矿道（可新建）
+    private ProjectBase resolveProject(ServerLevel level, EntityMaid maid, int y)
     {
         UUID maidUuid = maid.getUUID();
+
+        // 1. 恢复手头工程
         UUID assignedId = getAssignedProjectId(maidUuid);
         if (assignedId != null)
         {
             ProjectBase p = ProjectCenterManager.findProject(assignedId, ProjectBase.class);
-            if (p instanceof MineShaftProject shaft && !shaft.isCompleted()
-                    && shaft.getCycle() == cycle && shaft.getLayerY() == y)
+            if (p != null && !p.isCompleted() && getManagedProjects().contains(p))
             {
-                return shaft;
-            }
-            if (p instanceof MineShaftProject stale)
-            {
-                stale.markCompleted();      // 落后层残留工程：标记完成，等基类移除
+                return p;
             }
             unassignProject(maidUuid);
         }
+
+        // 2. 收集候选
+        List<ProjectBase> joinable = new ArrayList<>();
+        Set<BlockPos> tunnelHaveProject = new HashSet<>();
         for (ProjectBase p : getManagedProjects())
         {
-            if (!(p instanceof MineShaftProject shaft) || shaft.isCompleted()) continue;
-            if (shaft.getCycle() == cycle && shaft.getLayerY() == y)
+            if (p.isCompleted()) continue;
+            if (p instanceof MineShaftProject shaft)
+            {
+                if (shaft.getCycle() == cycle && shaft.getLayerY() == y)
+                {
+                    joinable.add(shaft);
+                }
+                else
+                {
+                    shaft.markCompleted();      // 落后层残留工程：标记完成，等基类移除
+                }
+                continue;
+            }
+            if (p instanceof MineTunnelProject tunnel)
+            {
+                tunnelHaveProject.add(tunnel.getPosition());
+                if (tunnel.hasAvailableSlot()) joinable.add(tunnel);
+            }
+        }
+        List<ControlEntry> creatableTunnels = new ArrayList<>();
+        for (ControlEntry e : sealedControls)
+        {
+            if (tunnelDone.contains(e.pos())) continue;
+            if (tunnelHaveProject.contains(e.pos())) continue;
+            creatableTunnels.add(e);
+        }
+        boolean shaftOption = !exhausted && layerIndex < cycleLayerYs.size() && y >= depthBottomY();
+        int optionCount = (shaftOption ? 1 : 0) + joinable.size() + creatableTunnels.size();
+        if (optionCount == 0) return null;
+        int r = level.getRandom().nextInt(optionCount);
+
+        if (shaftOption)
+        {
+            if (r == 0) return joinOrCreateShaft(level, maid, y);
+            r--;
+        }
+        if (r < joinable.size())
+        {
+            ProjectBase p = joinable.get(r);
+            if (p.claim(maidUuid))
+            {
+                assignProject(maidUuid, p.getId());
+                return p;
+            }
+            return null;
+        }
+        r -= joinable.size();
+        return createTunnelProject(level, maid, creatableTunnels.get(r));
+    }
+
+    // 加入或新建当前层竖井工程（容量不限）
+    private MineShaftProject joinOrCreateShaft(ServerLevel level, EntityMaid maid, int y)
+    {
+        UUID maidUuid = maid.getUUID();
+        for (ProjectBase p : getManagedProjects())
+        {
+            if (p instanceof MineShaftProject shaft && !shaft.isCompleted()
+                    && shaft.getCycle() == cycle && shaft.getLayerY() == y)
             {
                 if (shaft.claim(maidUuid))
                 {
@@ -464,7 +541,6 @@ public class MineInstance extends ProjectCenterInstance
                 }
                 return null;
             }
-            shaft.markCompleted();          // 落后层残留工程
         }
         MineShaftProject created = new MineShaftProject(
                 new BlockPos(getBlockPos().getX(), y, getBlockPos().getZ()), cycle, y);
@@ -475,6 +551,184 @@ public class MineInstance extends ProjectCenterInstance
         LOGGER.info("[MineDebug] 新建竖井层工程 周期C{} 层#{} Y={} 女仆={}",
                 cycle, layerIndex, y, shortId(maidUuid));
         return created;
+    }
+
+    // 新建矿道工程（容量 3）：同时把该矿道地板封存（实体位，10s 检查补洞）
+    private MineTunnelProject createTunnelProject(ServerLevel level, EntityMaid maid, ControlEntry ref)
+    {
+        MineTunnelProject created = new MineTunnelProject(ref.pos(), ref.cycle(), ref.layerY(), ref.edge());
+        created.setDimension(level.dimension());
+        if (!created.claim(maid.getUUID())) return null;
+        claimTargets(List.of(), created);
+        assignProject(maid.getUUID(), created.getId());
+        TunnelPlan plan = buildTunnelPlan(ref.cycle(), ref.layerY(), ref.edge());
+        if (plan != null)
+        {
+            for (BlockPos pos : plan.floor())
+            {
+                sealAs(pos, sealedSolid);
+            }
+        }
+        LOGGER.info("[MineDebug] 新建矿道工程 周期C{} Y={} 边={} 控制方块={} 女仆={}",
+                ref.cycle(), ref.layerY(), ref.edge(), ref.pos().toShortString(), shortId(maid.getUUID()));
+        return created;
+    }
+
+    // 是否还有未完工的矿道（挖尽后成员释放的闸门：矿道全清才放人）
+    public boolean hasPendingTunnels()
+    {
+        for (ControlEntry e : sealedControls)
+        {
+            if (!tunnelDone.contains(e.pos())) return true;
+        }
+        return false;
+    }
+
+    // ===================== 矿道几何（2026-09-04 拍板） =====================
+    //   纵道 = 3 格宽（平台中心列），从平台贴墙行外侧一格挖到范围边缘；
+    //   横道 = 1 格宽，位于纵道往外第 2、5、8…格（首条隔 1 格，其后每条隔 2 格），贯通范围宽度；
+    //   高度 2：挖格在层高 h+1/h+2；地板在 h（纳入实体封存，10s 检查补洞）
+    private TunnelPlan buildTunnelPlan(int cycle, int layerY, int edge)
+    {
+        if (edge < 0 || edge > 3) return null;
+        SpiralMinePlanner p = planner();
+        int half = (edge % 2 == 0) ? (p.getL() - 1) / 2 : (p.getW() - 1) / 2;
+        List<BlockPos> platform = p.getKeepBlocks(cycle, edge, half);
+        if (platform.isEmpty()) return null;
+        int h = platform.get(0).getY();
+        if (h != layerY) return null;
+        int cx = getBlockPos().getX();
+        int cz = getBlockPos().getZ();
+        int rMinX = getMinCorner().getX();
+        int rMaxX = getMaxCorner().getX();
+        int rMinZ = getMinCorner().getZ();
+        int rMaxZ = getMaxCorner().getZ();
+        Set<BlockPos> dig = new HashSet<>();
+        Set<BlockPos> floor = new HashSet<>();
+        switch (edge)
+        {
+            case 0 ->  // 北：主道往 -Z
+            {
+                for (int z = p.getMinZ() - 1; z >= rMinZ; z--)
+                {
+                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(dig, floor, x, z, h);
+                }
+                for (int z = p.getMinZ() - 2; z >= rMinZ; z -= 3)
+                {
+                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
+                }
+            }
+            case 1 ->  // 西：主道往 -X
+            {
+                for (int x = p.getMinX() - 1; x >= rMinX; x--)
+                {
+                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(dig, floor, x, z, h);
+                }
+                for (int x = p.getMinX() - 2; x >= rMinX; x -= 3)
+                {
+                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
+                }
+            }
+            case 2 ->  // 南：主道往 +Z
+            {
+                for (int z = p.getMaxZ() + 1; z <= rMaxZ; z++)
+                {
+                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(dig, floor, x, z, h);
+                }
+                for (int z = p.getMaxZ() + 2; z <= rMaxZ; z += 3)
+                {
+                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
+                }
+            }
+            case 3 ->  // 东：主道往 +X
+            {
+                for (int x = p.getMaxX() + 1; x <= rMaxX; x++)
+                {
+                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(dig, floor, x, z, h);
+                }
+                for (int x = p.getMaxX() + 2; x <= rMaxX; x += 3)
+                {
+                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
+                }
+            }
+        }
+        return new TunnelPlan(dig, floor);
+    }
+
+    private static void addTunnelColumn(Set<BlockPos> dig, Set<BlockPos> floor, int x, int z, int h)
+    {
+        dig.add(new BlockPos(x, h + 1, z));
+        dig.add(new BlockPos(x, h + 2, z));
+        floor.add(new BlockPos(x, h, z));
+    }
+
+    // 矿道派活：先挖格（最近优先；空气跳过、流动流体跳过、源流体→REPLACE、实体→按现有分类与可行性）；
+    // 挖格全清 → 标记完工（火把工序后续接入）
+    private MineTask nextTunnelTask(ServerLevel level, EntityMaid maid, MineTunnelProject tunnel)
+    {
+        TunnelPlan plan = buildTunnelPlan(tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge());
+        if (plan == null)
+        {
+            tunnel.markCompleted();
+            tunnelDone.add(tunnel.getPosition());
+            return null;
+        }
+        BlockPos best = null;
+        MineTask.Type bestType = null;
+        double bestDist = Double.MAX_VALUE;
+        boolean anyRemaining = false;
+        for (BlockPos pos : plan.dig())
+        {
+            if (isClaimed(pos))
+            {
+                anyRemaining = true;
+                continue;
+            }
+            BlockState state = level.getBlockState(pos);
+            if (state.isAir()) continue;
+            if (!state.getFluidState().isEmpty() && !state.getFluidState().isSource())
+            {
+                continue;                                   // 流动流体：等源清完自然干涸
+            }
+            anyRemaining = true;
+            MineTask.Type type;
+            if (!state.getFluidState().isEmpty())
+            {
+                type = MineTask.Type.REPLACE;               // 源流体：清掉+收瓶+塞子
+            }
+            else if (!isProcessableBy(level, pos, state, maid))
+            {
+                addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));   // 暂不可处理 → 困难表
+                continue;
+            }
+            else
+            {
+                type = MineTask.Type.DESTROY;
+            }
+            double dist = pos.distSqr(maid.blockPosition());
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = pos;
+                bestType = type;
+            }
+        }
+        if (best != null)
+        {
+            MineTask task = new MineTask(best, bestType);
+            layerSubtasks.put(maid.getUUID(), task);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {}(矿道 周期C{} Y={} 边={}) @ {}",
+                    shortId(maid.getUUID()), task.type(), tunnel.getCycle(), tunnel.getLayerY(),
+                    tunnel.getEdge(), best.toShortString());
+            return task;
+        }
+        if (anyRemaining) return null;                       // 有活但本轮派不出去（被认领/不可处理）→ 等待
+        tunnel.markCompleted();
+        tunnelDone.add(tunnel.getPosition());
+        LOGGER.info("[MineDebug] 矿道完工 周期C{} Y={} 边={} 控制方块={}",
+                tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge(),
+                tunnel.getPosition().toShortString());
+        return null;
     }
 
     // 层结算推进时标记对应竖井层工程完成（基类 doProjectTick 下一 tick 移除并清空分配 → 女仆随机再分配）
@@ -503,8 +757,8 @@ public class MineInstance extends ProjectCenterInstance
     {
         if (!(maid.level() instanceof ServerLevel level)) return null;
 
-        // 挖尽 = 待机（2026-09-04 拍板）：不推进新层，但封存检查（10s 周期）发现的维护任务
-        // （落入矿道的沙子/被打掉的灯等）仍会派发处理，处理完回待机
+        // 挖尽 = 不推进新层；封存检查发现的维护任务 + 未完工矿道工程继续派发（2026-09-04：
+        // 矿道是并行工程，挖尽只代表竖井到底，矿道全清后行为侧才释放成员）
         if (exhausted)
         {
             MineTask maintenance = takeHardTableTask(level, maid);
@@ -514,6 +768,11 @@ public class MineInstance extends ProjectCenterInstance
                 LOGGER.info("[MineDebug] 女仆={} 派发 {}(挖尽维护) @ {}", shortId(maid.getUUID()),
                         maintenance.type(), maintenance.pos().toShortString());
                 return maintenance;
+            }
+            ProjectBase tunnelProject = resolveProject(level, maid, Integer.MIN_VALUE);
+            if (tunnelProject instanceof MineTunnelProject tunnel)
+            {
+                return nextTunnelTask(level, maid, tunnel);
             }
             return null;
         }
@@ -541,9 +800,13 @@ public class MineInstance extends ProjectCenterInstance
             return hard;
         }
 
-        // 0.5 工程解析（2026-09-04 拍板：一层竖井 = 一个工程，与矿道工程并行）
-        MineShaftProject shaft = resolveShaftProject(level, maid, y);
-        if (shaft == null) return null;
+        // 0.5 工程解析（2026-09-04 拍板：竖井层/矿道都是工程，完工后随机再分配）
+        ProjectBase project = resolveProject(level, maid, y);
+        if (project == null) return null;
+        if (project instanceof MineTunnelProject tunnel)
+        {
+            return nextTunnelTask(level, maid, tunnel);
+        }
 
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
@@ -728,22 +991,62 @@ public class MineInstance extends ProjectCenterInstance
                 sealAs(task.pos(), isKeepPosition(task.pos()) ? sealedSolid : sealedAir);
             }
             case SETLIGHT -> sealAs(task.pos(), sealedLights);
-            case PLACE_CONTROL -> sealAs(task.pos(), sealedControls);
+            case PLACE_CONTROL -> sealControl(task.pos());
             default -> { }
         }
         // 完成的坐标从带类型困难表移除（取表派发时不移除，完成才算解决）
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
     }
 
-    // 封存坐标：先清四张封存列表中的旧记录（同一格重分类时移动），再按类别入表
+    // 封存坐标：先清三张 BlockPos 封存列表 + 控制封存记录中的同格，再按类别入表
     private void sealAs(BlockPos pos, List<BlockPos> target)
     {
         BlockPos immutable = pos.immutable();
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
         sealedLights.remove(immutable);
-        sealedControls.remove(immutable);
+        sealedControls.removeIf(e -> e.pos().equals(immutable));
         target.add(immutable);
+    }
+
+    // 控制位封存（带周期/层/边）：完成/重核时调用；已有记录沿用其元数据（跨周期补放不丢周期信息）
+    private void sealControl(BlockPos pos)
+    {
+        BlockPos immutable = pos.immutable();
+        ControlEntry old = findControlEntry(immutable);
+        int c = cycle;
+        int ly = immutable.getY();
+        int e = -1;
+        if (old != null)
+        {
+            c = old.cycle();
+            ly = old.layerY();
+            e = old.edge();
+        }
+        else
+        {
+            for (var en : cycleControls.entrySet())
+            {
+                if (en.getValue().pos().equals(immutable))
+                {
+                    ly = en.getKey();
+                    e = en.getValue().edge();
+                    break;
+                }
+            }
+        }
+        sealAs(immutable, new ArrayList<>());   // 清其余列表（含旧控制记录）
+        sealedControls.add(new ControlEntry(immutable, c, ly, e));
+    }
+
+    // 查控制封存记录（无则 null）
+    private ControlEntry findControlEntry(BlockPos pos)
+    {
+        for (ControlEntry e : sealedControls)
+        {
+            if (e.pos().equals(pos)) return e;
+        }
+        return null;
     }
 
     // 女仆放弃子任务：仅解绑，坐标回池子（§3 离场协议）
@@ -852,8 +1155,9 @@ public class MineInstance extends ProjectCenterInstance
     // （空手生成放置：无物品、无取货、不存在缺货）
     private MineTask nearestControlTask(ServerLevel level, int y)
     {
-        BlockPos pos = cycleControls.get(y);
-        if (pos == null) return null;
+        ControlMeta meta = cycleControls.get(y);
+        if (meta == null) return null;
+        BlockPos pos = meta.pos();
         if (!level.isLoaded(pos)) return null;
         if (isClaimed(pos)) return null;
         if (level.getBlockState(pos).getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) return null;
@@ -1028,13 +1332,13 @@ public class MineInstance extends ProjectCenterInstance
         int y = cycleLayerYs.get(layerIndex);
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
-        BlockPos control = cycleControls.get(y);
+        ControlMeta control = cycleControls.get(y);
         for (int x = p.getMinX() - 1; x <= p.getMaxX() + 1; x++)
         {
             for (int z = p.getMinZ() - 1; z <= p.getMaxZ() + 1; z++)
             {
                 BlockPos pos = new BlockPos(x, y, z);
-                if (pos.equals(control)) sealAs(pos, sealedControls);
+                if (control != null && pos.equals(control.pos())) sealControl(pos);
                 else if (lights.contains(pos)) sealAs(pos, sealedLights);
                 else if (keeps.contains(pos)) sealAs(pos, sealedSolid);
                 else sealAs(pos, sealedAir);
@@ -1309,7 +1613,7 @@ public class MineInstance extends ProjectCenterInstance
         int end = Math.min(sealedControls.size(), cursor + REFRESH_SLICE);
         for (int i = cursor; i < end; i++)
         {
-            BlockPos pos = sealedControls.get(i);
+            BlockPos pos = sealedControls.get(i).pos();
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
             if (state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) continue;
@@ -1324,8 +1628,9 @@ public class MineInstance extends ProjectCenterInstance
     public void destroyControlBlocks(ServerLevel level)
     {
         int removed = 0;
-        for (BlockPos pos : sealedControls)
+        for (ControlEntry entry : sealedControls)
         {
+            BlockPos pos = entry.pos();
             if (!level.isLoaded(pos)) continue;
             if (level.getBlockState(pos).getBlock() != MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) continue;
             level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);

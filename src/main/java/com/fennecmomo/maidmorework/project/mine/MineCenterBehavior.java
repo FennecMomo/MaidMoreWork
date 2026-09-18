@@ -201,11 +201,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        if (mine.isExhausted())
+        if (mine.isExhausted() && !mine.hasPendingTunnels())
         {
             mine.releaseAllMembers(level);
             finished = true;
-            logTransition(maid, "结束", "矿井已挖尽，释放全部成员");
+            logTransition(maid, "结束", "矿井已挖尽且矿道全完工，释放全部成员");
             return;
         }
 
