@@ -71,8 +71,8 @@ public class MineInstance extends ProjectCenterInstance
     // 当前周期控制位元数据（层 Y → 控制方块位置 + 边号）
     private record ControlMeta(BlockPos pos, int edge) { }
 
-    // 矿道几何：挖格（两层）+ 地板维护格
-    private record TunnelPlan(Set<BlockPos> dig, Set<BlockPos> floor) { }
+    // 矿道几何：挖格（两层）+ 地板维护格 + 地面火把位
+    private record TunnelPlan(Set<BlockPos> dig, Set<BlockPos> floor, Set<BlockPos> torches) { }
     // ===================== 多态序列化 =====================
 
     public static final MapCodec<MineInstance> MAP_CODEC =
@@ -91,6 +91,8 @@ public class MineInstance extends ProjectCenterInstance
                     .forGetter(c -> new ArrayList<>(c.sealedSolid)),
             BlockPos.CODEC.listOf().optionalFieldOf("sealedLights", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedLights)),
+            BlockPos.CODEC.listOf().optionalFieldOf("sealedFloorLights", List.of())
+                    .forGetter(c -> new ArrayList<>(c.sealedFloorLights)),
             ControlEntry.CODEC.listOf().optionalFieldOf("sealedControlRefs", List.of())
                     .forGetter(c -> new ArrayList<>(c.sealedControls)),
             Codec.STRING.listOf().optionalFieldOf("missingTools", List.of())
@@ -103,11 +105,13 @@ public class MineInstance extends ProjectCenterInstance
                                           boolean exhausted, int cycle, int layerIndex,
                                           List<MineTask> mineHardTasks,
                                           List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                                          List<BlockPos> sealedLights, List<ControlEntry> sealedControls,
+                                          List<BlockPos> sealedLights, List<BlockPos> sealedFloorLights,
+                                          List<ControlEntry> sealedControls,
                                           List<String> missingToolNotes)
     {
         return new MineInstance(base, shaftCornerNW, shaftCornerSE, exhausted, cycle, layerIndex,
-                mineHardTasks, sealedAir, sealedSolid, sealedLights, sealedControls, missingToolNotes);
+                mineHardTasks, sealedAir, sealedSolid, sealedLights, sealedFloorLights,
+                sealedControls, missingToolNotes);
     }
 
     // 扁平组合的 forGetter 引：把矿井实例视作基类交给基类 Codec 编解码
@@ -156,6 +160,7 @@ public class MineInstance extends ProjectCenterInstance
     private final List<BlockPos> sealedAir = new ArrayList<>();
     private final List<BlockPos> sealedSolid = new ArrayList<>();
     private final List<BlockPos> sealedLights = new ArrayList<>();
+    private final List<BlockPos> sealedFloorLights = new ArrayList<>();
     private final List<ControlEntry> sealedControls = new ArrayList<>();
 
     // 矿道完工缓存（控制方块位置 → 已挖完；避免每次找活重复扫描已完成矿道）
@@ -168,6 +173,7 @@ public class MineInstance extends ProjectCenterInstance
     private int airCursor = 0;
     private int solidCursor = 0;
     private int lightCursor = 0;
+    private int floorLightCursor = 0;
     private int controlCursor = 0;
 
     // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
@@ -214,7 +220,8 @@ public class MineInstance extends ProjectCenterInstance
                          boolean exhausted, int cycle, int layerIndex,
                          List<MineTask> mineHardTasks,
                          List<BlockPos> sealedAir, List<BlockPos> sealedSolid,
-                         List<BlockPos> sealedLights, List<ControlEntry> sealedControls,
+                         List<BlockPos> sealedLights, List<BlockPos> sealedFloorLights,
+                         List<ControlEntry> sealedControls,
                          List<String> missingToolNotes)
     {
         super(base);
@@ -227,6 +234,7 @@ public class MineInstance extends ProjectCenterInstance
         this.sealedAir.addAll(sealedAir);
         this.sealedSolid.addAll(sealedSolid);
         this.sealedLights.addAll(sealedLights);
+        this.sealedFloorLights.addAll(sealedFloorLights);
         this.sealedControls.addAll(sealedControls);
         this.missingToolNotes.addAll(missingToolNotes);
     }
@@ -605,6 +613,7 @@ public class MineInstance extends ProjectCenterInstance
         int rMaxZ = getMaxCorner().getZ();
         Set<BlockPos> dig = new HashSet<>();
         Set<BlockPos> floor = new HashSet<>();
+        Set<BlockPos> torches = new HashSet<>();
         switch (edge)
         {
             case 0 ->  // 北：主道往 -Z
@@ -616,6 +625,7 @@ public class MineInstance extends ProjectCenterInstance
                 for (int z = p.getMinZ() - 2; z >= rMinZ; z -= 3)
                 {
                     for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
+                    addLaneTorches(torches, true, z, cx, rMinX, rMaxX, h);
                 }
             }
             case 1 ->  // 西：主道往 -X
@@ -627,6 +637,7 @@ public class MineInstance extends ProjectCenterInstance
                 for (int x = p.getMinX() - 2; x >= rMinX; x -= 3)
                 {
                     for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
+                    addLaneTorches(torches, false, x, cz, rMinZ, rMaxZ, h);
                 }
             }
             case 2 ->  // 南：主道往 +Z
@@ -638,6 +649,7 @@ public class MineInstance extends ProjectCenterInstance
                 for (int z = p.getMaxZ() + 2; z <= rMaxZ; z += 3)
                 {
                     for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
+                    addLaneTorches(torches, true, z, cx, rMinX, rMaxX, h);
                 }
             }
             case 3 ->  // 东：主道往 +X
@@ -649,10 +661,11 @@ public class MineInstance extends ProjectCenterInstance
                 for (int x = p.getMaxX() + 2; x <= rMaxX; x += 3)
                 {
                     for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
+                    addLaneTorches(torches, false, x, cz, rMinZ, rMaxZ, h);
                 }
             }
         }
-        return new TunnelPlan(dig, floor);
+        return new TunnelPlan(dig, floor, torches);
     }
 
     private static void addTunnelColumn(Set<BlockPos> dig, Set<BlockPos> floor, int x, int z, int h)
@@ -660,6 +673,38 @@ public class MineInstance extends ProjectCenterInstance
         dig.add(new BlockPos(x, h + 1, z));
         dig.add(new BlockPos(x, h + 2, z));
         floor.add(new BlockPos(x, h, z));
+    }
+
+    // 一条横道的火把位（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
+    //   alongX=true：火把行固定 fixedCoord=z，中心 centerCoord=cx，范围 from..to = 范围 X
+    //   alongX=false：火把列固定 fixedCoord=x，中心 centerCoord=cz，范围 from..to = 范围 Z
+    private static void addLaneTorches(Set<BlockPos> torches, boolean alongX,
+                                       int fixedCoord, int centerCoord, int from, int to, int h)
+    {
+        if (alongX)
+        {
+            torches.add(new BlockPos(centerCoord, h + 1, fixedCoord));
+            for (int k = 3; centerCoord - k >= from; k += 3)
+            {
+                torches.add(new BlockPos(centerCoord - k, h + 1, fixedCoord));
+            }
+            for (int k = 3; centerCoord + k <= to; k += 3)
+            {
+                torches.add(new BlockPos(centerCoord + k, h + 1, fixedCoord));
+            }
+        }
+        else
+        {
+            torches.add(new BlockPos(fixedCoord, h + 1, centerCoord));
+            for (int k = 3; centerCoord - k >= from; k += 3)
+            {
+                torches.add(new BlockPos(fixedCoord, h + 1, centerCoord - k));
+            }
+            for (int k = 3; centerCoord + k <= to; k += 3)
+            {
+                torches.add(new BlockPos(fixedCoord, h + 1, centerCoord + k));
+            }
+        }
     }
 
     // 矿道派活：先挖格（最近优先；空气跳过、流动流体跳过、源流体→REPLACE、实体→按现有分类与可行性）；
@@ -723,6 +768,67 @@ public class MineInstance extends ProjectCenterInstance
             return task;
         }
         if (anyRemaining) return null;                       // 有活但本轮派不出去（被认领/不可处理）→ 等待
+
+        // 2) 火把（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
+        BlockPos bestTorch = null;
+        MineTask.Type bestTorchType = null;
+        double bestTorchDist = Double.MAX_VALUE;
+        boolean anyTorchRemaining = false;
+        for (BlockPos pos : plan.torches())
+        {
+            if (isClaimed(pos))
+            {
+                anyTorchRemaining = true;
+                continue;
+            }
+            BlockState state = level.getBlockState(pos);
+            if (state.getLightEmission() > 0) continue;      // 已有光源 → 视为已放
+            if (!state.getFluidState().isEmpty() && !state.getFluidState().isSource())
+            {
+                continue;                                    // 流动流体：等源清完自然干涸
+            }
+            anyTorchRemaining = true;
+            MineTask.Type type;
+            if (state.isAir())
+            {
+                if (!hasLightSource(maid))
+                {
+                    MineTask fetch = new MineTask(getBlockPos(), MineTask.Type.FETCH_LIGHT);
+                    layerSubtasks.put(maid.getUUID(), fetch);
+                    LOGGER.info("[MineDebug] 女仆={} 派发 FETCH_LIGHT(矿道火把) @ {}",
+                            shortId(maid.getUUID()), getBlockPos().toShortString());
+                    return fetch;                            // 去矿井方块取火把
+                }
+                type = MineTask.Type.SETLIGHT_FLOOR;
+            }
+            else if (!state.getFluidState().isEmpty())
+            {
+                type = MineTask.Type.REPLACE;                // 源流体：清掉+塞子
+            }
+            else
+            {
+                type = MineTask.Type.DESTROY;                // 有阻碍先挖开
+            }
+            double dist = pos.distSqr(maid.blockPosition());
+            if (dist < bestTorchDist)
+            {
+                bestTorchDist = dist;
+                bestTorch = pos;
+                bestTorchType = type;
+            }
+        }
+        if (bestTorch != null)
+        {
+            MineTask task = new MineTask(bestTorch, bestTorchType);
+            layerSubtasks.put(maid.getUUID(), task);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {}(矿道火把 周期C{} Y={} 边={}) @ {}",
+                    shortId(maid.getUUID()), task.type(), tunnel.getCycle(), tunnel.getLayerY(),
+                    tunnel.getEdge(), bestTorch.toShortString());
+            return task;
+        }
+        if (anyTorchRemaining) return null;
+
+        // 3) 挖格全清 + 火把全亮 → 完工
         tunnel.markCompleted();
         tunnelDone.add(tunnel.getPosition());
         LOGGER.info("[MineDebug] 矿道完工 周期C{} Y={} 边={} 控制方块={}",
@@ -991,6 +1097,7 @@ public class MineInstance extends ProjectCenterInstance
                 sealAs(task.pos(), isKeepPosition(task.pos()) ? sealedSolid : sealedAir);
             }
             case SETLIGHT -> sealAs(task.pos(), sealedLights);
+            case SETLIGHT_FLOOR -> sealAs(task.pos(), sealedFloorLights);
             case PLACE_CONTROL -> sealControl(task.pos());
             default -> { }
         }
@@ -998,13 +1105,14 @@ public class MineInstance extends ProjectCenterInstance
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
     }
 
-    // 封存坐标：先清三张 BlockPos 封存列表 + 控制封存记录中的同格，再按类别入表
+    // 封存坐标：先清各张 BlockPos 封存列表 + 控制封存记录中的同格，再按类别入表
     private void sealAs(BlockPos pos, List<BlockPos> target)
     {
         BlockPos immutable = pos.immutable();
         sealedAir.remove(immutable);
         sealedSolid.remove(immutable);
         sealedLights.remove(immutable);
+        sealedFloorLights.remove(immutable);
         sealedControls.removeIf(e -> e.pos().equals(immutable));
         target.add(immutable);
     }
@@ -1087,6 +1195,7 @@ public class MineInstance extends ProjectCenterInstance
             {
                 case FILL -> !state.isAir();
                 case SETLIGHT -> state.getLightEmission() > 0;
+                case SETLIGHT_FLOOR -> state.getLightEmission() > 0;
                 case PLACE_CONTROL -> state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get();
                 default -> state.isAir();
             };
@@ -1095,11 +1204,13 @@ public class MineInstance extends ProjectCenterInstance
                 satisfied.add(task);
                 continue;
             }
-            // 基岩类 DESTROY 永远无法派发，留表（FILL/PLACE_CONTROL 非挖掘任务不受此限）
+            // 基岩类 DESTROY 永远无法派发，留表（FILL/PLACE_CONTROL/SETLIGHT_FLOOR 非挖掘任务不受此限）
             if (task.type() != MineTask.Type.FILL && task.type() != MineTask.Type.PLACE_CONTROL
+                    && task.type() != MineTask.Type.SETLIGHT_FLOOR
                     && state.getDestroySpeed(level, pos) < 0) continue;
-            // 控制方块为空手放置，无工具可行性要求
-            if (task.type() != MineTask.Type.PLACE_CONTROL && !isProcessableBy(level, pos, state, maid)) continue;
+            // 控制方块/地面火把为空手放置或放置类任务，无工具可行性要求
+            if (task.type() != MineTask.Type.PLACE_CONTROL && task.type() != MineTask.Type.SETLIGHT_FLOOR
+                    && !isProcessableBy(level, pos, state, maid)) continue;
             double dist = pos.distSqr(maid.blockPosition());
             if (dist < bestDist)
             {
@@ -1600,6 +1711,9 @@ public class MineInstance extends ProjectCenterInstance
         solidCursor = solidEnd;
         int lightEnd = checkSealedSlice(level, sealedLights, lightCursor, MineTask.Type.SETLIGHT, true);
         lightCursor = lightEnd;
+        int floorLightEnd = checkSealedSlice(level, sealedFloorLights, floorLightCursor,
+                MineTask.Type.SETLIGHT_FLOOR, true);
+        floorLightCursor = floorLightEnd;
         int controlEnd = checkControlSlice(level, controlCursor);
         controlCursor = controlEnd;
     }

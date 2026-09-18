@@ -420,6 +420,44 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 }
             }
 
+            // === SETLIGHT_FLOOR：矿道地面火把（2026-09-04 拍板：站立火把插在地板上） ===
+            //   流程同 SETLIGHT：已有光源→完成；有水→清；有方块→挖开；空气→放置；没灯→释放重派取货
+            case SETLIGHT_FLOOR ->
+            {
+                if (state.getLightEmission() > 0)
+                {
+                    finishTask(mine, maid, task);
+                    return;
+                }
+                if (!state.getFluidState().isEmpty())
+                {
+                    if (state.getFluidState().isSource())
+                    {
+                        clearFluidAndCollectBottle(level, maid, target, state);
+                    }
+                    else
+                    {
+                        level.setBlock(target, Blocks.AIR.defaultBlockState(), 3);
+                    }
+                    releaseCurrent(mine, maid);
+                    return;
+                }
+                if (!state.isAir())
+                {
+                    progressDig(level, maid, mine, task, target, state);
+                    return;
+                }
+                if (tryPlaceFloorTorch(level, maid, target))
+                {
+                    finishTask(mine, maid, task);
+                }
+                else
+                {
+                    // 没灯或脚下没支撑（等地板补洞）→ 释放重派
+                    releaseCurrent(mine, maid);
+                }
+            }
+
             // === FETCH_LIGHT：走到矿井方块，从仓库取一组光源（B2 拍板） ===
             case FETCH_LIGHT ->
             {
@@ -1051,6 +1089,29 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             be.bind(mine.getId());
         }
         LOGGER.info("[MineDebug] 女仆={} 放置矿道层控制方块 @ {}", shortId(maid), target.toShortString());
+    }
+
+    // 放置矿道地面火把（2026-09-04 拍板：站立火把；放置前原版 canSurvive 校验脚下支撑）
+    private boolean tryPlaceFloorTorch(ServerLevel level, EntityMaid maid, BlockPos target)
+    {
+        BlockState placeState = Blocks.TORCH.defaultBlockState();
+        if (!placeState.canSurvive(level, target)) return false;
+        CombinedResourceHandler<ItemResource> inv = maid.getItemManager().getAvailableBackpackInv();
+        for (int i = 0; i < inv.size(); i++)
+        {
+            ItemResource res = inv.getResource(i);
+            if (res.isEmpty()) continue;
+            ItemStack stack = new ItemStack(res.getItem(), 1);
+            if (!stack.is(Items.TORCH)) continue;
+            level.setBlock(target, placeState, 3);
+            try (Transaction tx = Transaction.openRoot())
+            {
+                inv.extract(i, res, 1, tx);
+                tx.commit();
+            }
+            return true;
+        }
+        return false;
     }
 
     // 放置光源（2026-09-04 拍板：只认火把；朝向按灯位几何推算支撑墙）
