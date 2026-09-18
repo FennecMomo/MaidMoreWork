@@ -185,6 +185,7 @@ public class MineInstance extends ProjectCenterInstance
     private static final double STUCK_GOAL_REACH_SQ = 16;   // 目标/中心豁免距离平方（4 格）
     private final Map<UUID, BlockPos> stuckGoal = new HashMap<>();     // 当前目标（绑定子任务，无则中心）
     private final Map<UUID, Double> stuckBestDist = new HashMap<>();   // 距目标历史最近距离平方
+    private final Map<UUID, BlockPos> stuckLastPos = new HashMap<>();  // 上次采样位置（陆地有位移算进展）
     private final Map<UUID, Integer> stuckTicks = new HashMap<>();
     private final Set<UUID> stuckRecovery = new HashSet<>();
     private final Map<UUID, Integer> absentSamples = new HashMap<>();  // 绑定女仆失联采样计数（活跃任务熔断兜底）
@@ -1234,6 +1235,7 @@ public class MineInstance extends ProjectCenterInstance
         {
             BlockPos pos = task.pos();
             if (!level.isLoaded(pos)) continue;
+            if (isClaimed(pos)) continue;      // 已被认领的分给别人会形成"车队"（2026-09-04 修正）
             BlockState state = level.getBlockState(pos);
             // 已解决判定按任务类型：DESTROY→空气；FILL→非空气；SETLIGHT→该格有光源；
             // PLACE_CONTROL→该格是控制方块
@@ -1591,6 +1593,10 @@ public class MineInstance extends ProjectCenterInstance
             BlockPos goal = bound != null ? bound.pos() : getBlockPos();
             double d = pos.distSqr(goal);
             BlockPos prevGoal = stuckGoal.put(uuid, goal);
+            // 陆地位移也算有进展（2026-09-04 修正：长距离绕路/爬螺旋时"接近目标"不单调，
+            // 只看接近会把正常走路误判成卡死；水里仍只看接近，水漂移必须能抓出来）
+            BlockPos lastPos = stuckLastPos.put(uuid, pos.immutable());
+            boolean movedOnLand = lastPos != null && !pos.equals(lastPos) && !maid.isInWater();
             if (!goal.equals(prevGoal) || d <= STUCK_GOAL_REACH_SQ
                     || pos.distSqr(getBlockPos()) <= STUCK_GOAL_REACH_SQ)
             {
@@ -1602,6 +1608,11 @@ public class MineInstance extends ProjectCenterInstance
             if (d < best)
             {
                 stuckBestDist.put(uuid, d);
+                stuckTicks.remove(uuid);
+                continue;
+            }
+            if (movedOnLand)
+            {
                 stuckTicks.remove(uuid);
                 continue;
             }
@@ -1624,6 +1635,7 @@ public class MineInstance extends ProjectCenterInstance
     {
         stuckGoal.remove(uuid);
         stuckBestDist.remove(uuid);
+        stuckLastPos.remove(uuid);
         stuckTicks.remove(uuid);
     }
 

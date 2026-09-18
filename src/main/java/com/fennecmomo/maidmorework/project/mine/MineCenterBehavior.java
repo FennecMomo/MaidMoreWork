@@ -294,7 +294,16 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         // 导航
         if (!reachedTarget)
         {
-            navigate(level, maid, target);
+            // 目标是矿井方块（如 FETCH_LIGHT）→ 走"回中心"入口（含控制器传送，2026-09-04 修正：
+            // 之前走普通寻路要爬整条螺旋，路上被 10 秒熔断误判传送，来回弹）
+            if (target.equals(mine.getBlockPos()))
+            {
+                travelToMineBlock(level, maid, mine);
+            }
+            else
+            {
+                navigate(level, maid, target);
+            }
             return;
         }
 
