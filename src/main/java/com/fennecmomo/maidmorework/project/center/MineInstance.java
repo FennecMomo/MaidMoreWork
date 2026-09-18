@@ -18,6 +18,7 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
@@ -175,6 +176,7 @@ public class MineInstance extends ProjectCenterInstance
     private int lightCursor = 0;
     private int floorLightCursor = 0;
     private int controlCursor = 0;
+    private int openAirCursor = 0;
 
     // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
     // 女仆距目标无进展累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
@@ -569,7 +571,7 @@ public class MineInstance extends ProjectCenterInstance
         if (!created.claim(maid.getUUID())) return null;
         claimTargets(List.of(), created);
         assignProject(maid.getUUID(), created.getId());
-        TunnelPlan plan = buildTunnelPlan(ref.cycle(), ref.layerY(), ref.edge());
+        TunnelPlan plan = buildTunnelPlan(level, ref.cycle(), ref.layerY(), ref.edge(), true);
         if (plan != null)
         {
             for (BlockPos pos : plan.floor())
@@ -577,6 +579,7 @@ public class MineInstance extends ProjectCenterInstance
                 sealAs(pos, sealedSolid);
             }
         }
+        cleanupOpenAirTunnel(level, ref);
         LOGGER.info("[MineDebug] 新建矿道工程 周期C{} Y={} 边={} 控制方块={} 女仆={}",
                 ref.cycle(), ref.layerY(), ref.edge(), ref.pos().toShortString(), shortId(maid.getUUID()));
         return created;
@@ -596,7 +599,8 @@ public class MineInstance extends ProjectCenterInstance
     //   纵道 = 3 格宽（平台中心列），从平台贴墙行外侧一格挖到范围边缘；
     //   横道 = 1 格宽，位于纵道往外第 2、5、8…格（首条隔 1 格，其后每条隔 2 格），贯通范围宽度；
     //   高度 2：挖格在层高 h+1/h+2；地板在 h（纳入实体封存，10s 检查补洞）
-    private TunnelPlan buildTunnelPlan(int cycle, int layerY, int edge)
+    //   露天跳过（2026-09-04 修正）：地表高度 ≤ 地板层的列不挖/不封/不放灯（矿道挖出地面会往空气里垫垫脚石）
+    private TunnelPlan buildTunnelPlan(ServerLevel level, int cycle, int layerY, int edge, boolean skipOpenAir)
     {
         if (edge < 0 || edge > 3) return null;
         SpiralMinePlanner p = planner();
@@ -620,56 +624,64 @@ public class MineInstance extends ProjectCenterInstance
             {
                 for (int z = p.getMinZ() - 1; z >= rMinZ; z--)
                 {
-                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(dig, floor, x, z, h);
+                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
                 }
                 for (int z = p.getMinZ() - 2; z >= rMinZ; z -= 3)
                 {
-                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
-                    addLaneTorches(torches, true, z, cx, rMinX, rMaxX, h);
+                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
+                    addLaneTorches(level, skipOpenAir, torches, true, z, cx, rMinX, rMaxX, h);
                 }
             }
             case 1 ->  // 西：主道往 -X
             {
                 for (int x = p.getMinX() - 1; x >= rMinX; x--)
                 {
-                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(dig, floor, x, z, h);
+                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
                 }
                 for (int x = p.getMinX() - 2; x >= rMinX; x -= 3)
                 {
-                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
-                    addLaneTorches(torches, false, x, cz, rMinZ, rMaxZ, h);
+                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
+                    addLaneTorches(level, skipOpenAir, torches, false, x, cz, rMinZ, rMaxZ, h);
                 }
             }
             case 2 ->  // 南：主道往 +Z
             {
                 for (int z = p.getMaxZ() + 1; z <= rMaxZ; z++)
                 {
-                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(dig, floor, x, z, h);
+                    for (int x = cx - 1; x <= cx + 1; x++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
                 }
                 for (int z = p.getMaxZ() + 2; z <= rMaxZ; z += 3)
                 {
-                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(dig, floor, x, z, h);
-                    addLaneTorches(torches, true, z, cx, rMinX, rMaxX, h);
+                    for (int x = rMinX; x <= rMaxX; x++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
+                    addLaneTorches(level, skipOpenAir, torches, true, z, cx, rMinX, rMaxX, h);
                 }
             }
             case 3 ->  // 东：主道往 +X
             {
                 for (int x = p.getMaxX() + 1; x <= rMaxX; x++)
                 {
-                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(dig, floor, x, z, h);
+                    for (int z = cz - 1; z <= cz + 1; z++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
                 }
                 for (int x = p.getMaxX() + 2; x <= rMaxX; x += 3)
                 {
-                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(dig, floor, x, z, h);
-                    addLaneTorches(torches, false, x, cz, rMinZ, rMaxZ, h);
+                    for (int z = rMinZ; z <= rMaxZ; z++) addTunnelColumn(level, skipOpenAir, dig, floor, x, z, h);
+                    addLaneTorches(level, skipOpenAir, torches, false, x, cz, rMinZ, rMaxZ, h);
                 }
             }
         }
         return new TunnelPlan(dig, floor, torches);
     }
 
-    private static void addTunnelColumn(Set<BlockPos> dig, Set<BlockPos> floor, int x, int z, int h)
+    // 该列在矿道地板层是否露天（地表高度 ≤ 地板层 h）
+    private static boolean isOpenColumn(ServerLevel level, int x, int z, int h)
     {
+        return level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z) <= h;
+    }
+
+    private static void addTunnelColumn(ServerLevel level, boolean skipOpenAir, Set<BlockPos> dig,
+                                        Set<BlockPos> floor, int x, int z, int h)
+    {
+        if (skipOpenAir && isOpenColumn(level, x, z, h)) return;
         dig.add(new BlockPos(x, h + 1, z));
         dig.add(new BlockPos(x, h + 2, z));
         floor.add(new BlockPos(x, h, z));
@@ -678,30 +690,40 @@ public class MineInstance extends ProjectCenterInstance
     // 一条横道的火把位（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
     //   alongX=true：火把行固定 fixedCoord=z，中心 centerCoord=cx，范围 from..to = 范围 X
     //   alongX=false：火把列固定 fixedCoord=x，中心 centerCoord=cz，范围 from..to = 范围 Z
-    private static void addLaneTorches(Set<BlockPos> torches, boolean alongX,
+    private static void addLaneTorches(ServerLevel level, boolean skipOpenAir, Set<BlockPos> torches, boolean alongX,
                                        int fixedCoord, int centerCoord, int from, int to, int h)
     {
         if (alongX)
         {
-            torches.add(new BlockPos(centerCoord, h + 1, fixedCoord));
+            if (!skipOpenAir || !isOpenColumn(level, centerCoord, fixedCoord, h))
+            {
+                torches.add(new BlockPos(centerCoord, h + 1, fixedCoord));
+            }
             for (int k = 3; centerCoord - k >= from; k += 3)
             {
+                if (skipOpenAir && isOpenColumn(level, centerCoord - k, fixedCoord, h)) continue;
                 torches.add(new BlockPos(centerCoord - k, h + 1, fixedCoord));
             }
             for (int k = 3; centerCoord + k <= to; k += 3)
             {
+                if (skipOpenAir && isOpenColumn(level, centerCoord + k, fixedCoord, h)) continue;
                 torches.add(new BlockPos(centerCoord + k, h + 1, fixedCoord));
             }
         }
         else
         {
-            torches.add(new BlockPos(fixedCoord, h + 1, centerCoord));
+            if (!skipOpenAir || !isOpenColumn(level, fixedCoord, centerCoord, h))
+            {
+                torches.add(new BlockPos(fixedCoord, h + 1, centerCoord));
+            }
             for (int k = 3; centerCoord - k >= from; k += 3)
             {
+                if (skipOpenAir && isOpenColumn(level, fixedCoord, centerCoord - k, h)) continue;
                 torches.add(new BlockPos(fixedCoord, h + 1, centerCoord - k));
             }
             for (int k = 3; centerCoord + k <= to; k += 3)
             {
+                if (skipOpenAir && isOpenColumn(level, fixedCoord, centerCoord + k, h)) continue;
                 torches.add(new BlockPos(fixedCoord, h + 1, centerCoord + k));
             }
         }
@@ -711,7 +733,7 @@ public class MineInstance extends ProjectCenterInstance
     // 挖格全清 → 标记完工（火把工序后续接入）
     private MineTask nextTunnelTask(ServerLevel level, EntityMaid maid, MineTunnelProject tunnel)
     {
-        TunnelPlan plan = buildTunnelPlan(tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge());
+        TunnelPlan plan = buildTunnelPlan(level, tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge(), true);
         if (plan == null)
         {
             tunnel.markCompleted();
@@ -1783,6 +1805,45 @@ public class MineInstance extends ProjectCenterInstance
         floorLightCursor = floorLightEnd;
         int controlEnd = checkControlSlice(level, controlCursor);
         controlCursor = controlEnd;
+        // 露天列清理（每 10 秒轮询一条矿道，2026-09-04 修正）
+        if (!sealedControls.isEmpty())
+        {
+            if (openAirCursor >= sealedControls.size()) openAirCursor = 0;
+            cleanupOpenAirTunnel(level, sealedControls.get(openAirCursor));
+            openAirCursor++;
+        }
+    }
+
+    // 露天列清理（2026-09-04 修正）：矿道露天部分此前被封"实体地板"并被女仆垫了垫脚石，
+    // 这里解除封存并把露天列地板层上多出来的方块（只可能是垫脚石）派 DESTROY 挖掉
+    private void cleanupOpenAirTunnel(ServerLevel level, ControlEntry ref)
+    {
+        TunnelPlan full = buildTunnelPlan(level, ref.cycle(), ref.layerY(), ref.edge(), false);
+        if (full == null) return;
+        int h = ref.layerY();
+        for (BlockPos floorPos : full.floor())
+        {
+            if (!isOpenColumn(level, floorPos.getX(), floorPos.getZ(), h)) continue;
+            unseal(floorPos);
+            unseal(floorPos.above());
+            unseal(floorPos.above(2));
+            if (!level.isLoaded(floorPos)) continue;
+            BlockState floorState = level.getBlockState(floorPos);
+            if (!floorState.isAir() && floorState.getFluidState().isEmpty())
+            {
+                addHardTask(new MineTask(floorPos.immutable(), MineTask.Type.DESTROY));
+            }
+        }
+    }
+
+    // 解除单格封存（不动控制方块记录）
+    private void unseal(BlockPos pos)
+    {
+        BlockPos immutable = pos.immutable();
+        sealedAir.remove(immutable);
+        sealedSolid.remove(immutable);
+        sealedLights.remove(immutable);
+        sealedFloorLights.remove(immutable);
     }
 
     // 控制位验证线（2026-09-04 拍板，与光源线同款）：格上不是矿道层控制方块 → 重派 PLACE_CONTROL
