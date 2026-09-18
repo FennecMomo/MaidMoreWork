@@ -741,22 +741,20 @@ public class MineInstance extends ProjectCenterInstance
             {
                 type = MineTask.Type.REPLACE;               // 源流体：清掉+收瓶+塞子
             }
-            else if (!isProcessableBy(level, pos, state, maid))
-            {
-                addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));   // 暂不可处理 → 困难表
-                continue;
-            }
             else
             {
                 type = MineTask.Type.DESTROY;
             }
             double dist = pos.distSqr(maid.blockPosition());
-            if (dist < bestDist)
+            if (dist >= bestDist) continue;                 // 更远的先不看（限制可行性检查次数）
+            if (type == MineTask.Type.DESTROY && !isProcessableBy(level, pos, state, maid))
             {
-                bestDist = dist;
-                best = pos;
-                bestType = type;
+                addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));   // 暂不可处理 → 困难表
+                continue;
             }
+            bestDist = dist;
+            best = pos;
+            bestType = type;
         }
         if (best != null)
         {
@@ -810,12 +808,15 @@ public class MineInstance extends ProjectCenterInstance
                 type = MineTask.Type.DESTROY;                // 有阻碍先挖开
             }
             double dist = pos.distSqr(maid.blockPosition());
-            if (dist < bestTorchDist)
+            if (dist >= bestTorchDist) continue;
+            if (type == MineTask.Type.DESTROY && !isProcessableBy(level, pos, state, maid))
             {
-                bestTorchDist = dist;
-                bestTorch = pos;
-                bestTorchType = type;
+                addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
+                continue;
             }
+            bestTorchDist = dist;
+            bestTorch = pos;
+            bestTorchType = type;
         }
         if (bestTorch != null)
         {
