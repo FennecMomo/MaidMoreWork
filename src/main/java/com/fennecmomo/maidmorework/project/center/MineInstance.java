@@ -731,6 +731,7 @@ public class MineInstance extends ProjectCenterInstance
             }
             BlockState state = level.getBlockState(pos);
             if (state.isAir()) continue;
+            if (state.getLightEmission() > 0) continue;         // 已放好的火把/光源 → 视为已处理（防挖灯循环）
             if (!state.getFluidState().isEmpty() && !state.getFluidState().isSource())
             {
                 continue;                                   // 流动流体：等源清完自然干涸
@@ -1038,7 +1039,11 @@ public class MineInstance extends ProjectCenterInstance
 
         // 3. 层完成结算：他人在干 → 让位等待（§3）；无人干活 → 等 2 秒复核（D1 终版：
         //    掉落物落网期间派发扫描实时重判，2 秒后池子仍空才推进下一层）
-        if (!layerSubtasks.isEmpty()) return null;
+        //    2026-09-04 修正：只算本层（竖井）任务，矿道工程的在飞任务不算"他人在干"
+        for (MineTask boundTask : layerSubtasks.values())
+        {
+            if (isLayerTask(boundTask, y)) return null;
+        }
         long now = level.getGameTime();
         if (settleWaitUntil == 0)
         {
@@ -1082,7 +1087,12 @@ public class MineInstance extends ProjectCenterInstance
     public void completeWork(EntityMaid maid, MineTask task)
     {
         layerSubtasks.remove(maid.getUUID());
-        settleWaitUntil = 0;
+        // 层结算倒计时只由本层（竖井）任务完成重置；矿道任务完成不重置（2026-09-04 修正：
+        // 矿道火把反复完成会不断重置 2s 复核，导致竖井层永远结算不了）
+        if (layerIndex < cycleLayerYs.size() && isLayerTask(task, cycleLayerYs.get(layerIndex)))
+        {
+            settleWaitUntil = 0;
+        }
         if (task.type() == MineTask.Type.FETCH_LIGHT) return;   // 取灯非坐标任务
         // 完成的坐标记入本层已处理（防止"临时塞子"等完成后被本层扫描立即重复派发）
         layerProcessed.add(task.pos());
@@ -1173,6 +1183,20 @@ public class MineInstance extends ProjectCenterInstance
             if (task.pos().equals(pos)) return true;
         }
         return false;
+    }
+
+    // 该任务是否属于指定层的竖井工作（挖格/火把/控制方块）：
+    // 用于层结算"他人在干"判定与层解绑范围——矿道任务（层高 h+1/h+2 或范围外）不干扰竖井层结算
+    private boolean isLayerTask(MineTask task, int y)
+    {
+        BlockPos pos = task.pos();
+        ControlMeta control = cycleControls.get(y);
+        if (control != null && pos.equals(control.pos())) return true;
+        if (cycleLights.getOrDefault(y, Set.of()).contains(pos)) return true;
+        if (pos.getY() != y) return false;
+        SpiralMinePlanner p = planner();
+        return pos.getX() >= p.getMinX() - 1 && pos.getX() <= p.getMaxX() + 1
+                && pos.getZ() >= p.getMinZ() - 1 && pos.getZ() <= p.getMaxZ() + 1;
     }
 
     // 矿井带类型困难表取任务（§6 步骤0 终版）
@@ -1411,14 +1435,16 @@ public class MineInstance extends ProjectCenterInstance
     private void advanceLayer(ServerLevel level)
     {
         reconcileLayerSeals();
+        int finishedY = cycleLayerYs.get(layerIndex);
         // 竖井层工程完工标记（2026-09-04 拍板：层=工程，完工后基类清分配，女仆随机再分配）
-        markShaftProjectComplete(cycle, cycleLayerYs.get(layerIndex));
+        markShaftProjectComplete(cycle, finishedY);
         for (BlockPos pos : layerHardList)
         {
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
         }
         layerHardList.clear();
-        layerSubtasks.clear();
+        // 只解绑本层任务；矿道工程的在飞任务保持绑定（2026-09-04 修正）
+        layerSubtasks.entrySet().removeIf(e -> isLayerTask(e.getValue(), finishedY));
         layerProcessed.clear();
         settleWaitUntil = 0;
 
