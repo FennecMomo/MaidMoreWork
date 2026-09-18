@@ -780,18 +780,8 @@ public class MineInstance extends ProjectCenterInstance
             best = pos;
             bestType = type;
         }
-        if (best != null)
-        {
-            MineTask task = new MineTask(best, bestType);
-            layerSubtasks.put(maid.getUUID(), task);
-            LOGGER.info("[MineDebug] 女仆={} 派发 {}(矿道 周期C{} Y={} 边={}) @ {}",
-                    shortId(maid.getUUID()), task.type(), tunnel.getCycle(), tunnel.getLayerY(),
-                    tunnel.getEdge(), best.toShortString());
-            return task;
-        }
-        if (anyRemaining) return null;                       // 有活但本轮派不出去（被认领/不可处理）→ 等待
-
-        // 2) 火把（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
+        // 2) 火把候选（2026-09-04 拍板：火把并入派发、谁近做谁——矿道不露天，挖到哪亮到哪防刷怪；
+        //    主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
         BlockPos bestTorch = null;
         MineTask.Type bestTorchType = null;
         double bestTorchDist = Double.MAX_VALUE;
@@ -842,6 +832,17 @@ public class MineInstance extends ProjectCenterInstance
             bestTorch = pos;
             bestTorchType = type;
         }
+
+        // 3) 派发：挖格与火把谁近做谁（会先挖通火把位，挖通后立即点亮）
+        if (best != null && (bestTorch == null || bestDist <= bestTorchDist))
+        {
+            MineTask task = new MineTask(best, bestType);
+            layerSubtasks.put(maid.getUUID(), task);
+            LOGGER.info("[MineDebug] 女仆={} 派发 {}(矿道 周期C{} Y={} 边={}) @ {}",
+                    shortId(maid.getUUID()), task.type(), tunnel.getCycle(), tunnel.getLayerY(),
+                    tunnel.getEdge(), best.toShortString());
+            return task;
+        }
         if (bestTorch != null)
         {
             MineTask task = new MineTask(bestTorch, bestTorchType);
@@ -851,9 +852,9 @@ public class MineInstance extends ProjectCenterInstance
                     tunnel.getEdge(), bestTorch.toShortString());
             return task;
         }
-        if (anyTorchRemaining) return null;
+        if (anyRemaining || anyTorchRemaining) return null;   // 有活但本轮派不出去（被认领/不可处理）→ 等待
 
-        // 3) 挖格全清 + 火把全亮 → 完工
+        // 4) 挖格全清 + 火把全亮 → 完工
         tunnel.markCompleted();
         tunnelDone.add(tunnel.getPosition());
         LOGGER.info("[MineDebug] 矿道完工 周期C{} Y={} 边={} 控制方块={}",
