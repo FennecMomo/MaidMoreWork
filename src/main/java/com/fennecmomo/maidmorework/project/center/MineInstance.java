@@ -1300,6 +1300,46 @@ public class MineInstance extends ProjectCenterInstance
         return new MineTask(pos, MineTask.Type.PLACE_CONTROL);
     }
 
+    // ===================== 矿道控制器传送（2026-09-04 拍板） =====================
+
+    // 已放置控制方块里的最高 Y（"第一个矿道控制器"；无则 null）
+    public Integer controlTopY()
+    {
+        Integer top = null;
+        for (ControlEntry e : sealedControls)
+        {
+            if (top == null || e.layerY() > top) top = e.layerY();
+        }
+        return top;
+    }
+
+    // 离给定点最近的控制方块位置（无则 null）
+    public BlockPos controlNearest(BlockPos from)
+    {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (ControlEntry e : sealedControls)
+        {
+            double d = e.pos().distSqr(from);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = e.pos();
+            }
+        }
+        return best;
+    }
+
+    // 范围调整后清矿道完工缓存（2026-09-04 拍板）：已完工矿道按新范围重新清查，
+    // 多出来的格子重新变回可接工作；新格子的地板封存随工程重建
+    @Override
+    public void setRadius(int radius)
+    {
+        super.setRadius(radius);
+        tunnelDone.clear();
+        LOGGER.info("[MineDebug] 矿井范围调整为 {}，矿道完工缓存已清（矿道将按新范围重查）", radius);
+    }
+
     // 光源判定（B2 拍板 2026-09-04 修正：只认火把——灯笼无法贴墙挂放，待后续单独立项支持）
     private static boolean hasLightSource(EntityMaid maid)
     {

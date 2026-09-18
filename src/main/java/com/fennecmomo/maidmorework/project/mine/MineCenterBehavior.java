@@ -13,6 +13,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.behavior.Behavior;
@@ -25,6 +27,7 @@ import net.minecraft.world.level.block.WallTorchBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.transfer.CombinedResourceHandler;
@@ -241,7 +244,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (mine.isLayerPaused() && currentTask == null)
         {
             logTransition(maid, "暂停等待", "层不可处理方块超过10%，等待补货");
-            if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
+            if (!isNear(maid, mine.getBlockPos())) travelToMineBlock(level, maid, mine);
             return;
         }
 
@@ -255,7 +258,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 maid.setHomeTo(mine.getBlockPos(), 32);
                 exhaustedLogged = true;
             }
-            if (!isNear(maid, mine.getBlockPos())) navigate(level, maid, mine.getBlockPos());
+            if (!isNear(maid, mine.getBlockPos())) travelToMineBlock(level, maid, mine);
         }
 
         // 领任务
@@ -268,6 +271,16 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             digProgress = 0f;
             digPos = null;
             logTransition(maid, "执行任务", task.type() + " @ " + task.pos().toShortString());
+            // 控制器传送（2026-09-04 拍板）：从中心出发干活——已有控制方块且人在中心附近 →
+            // 直接传送到离任务最近的控制器平台，再从那里走过去（任务在中心附近则跳过）
+            if (!isNear(maid, task.pos()) && isNear(maid, mine.getBlockPos()))
+            {
+                BlockPos hub = mine.controlNearest(task.pos());
+                if (hub != null)
+                {
+                    teleportNearHub(level, maid, hub);
+                }
+            }
         }
 
         MineTask task = currentTask;
@@ -578,7 +591,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             logTransition(maid, "挖矿循环", "存矿完成");
             return;
         }
-        navigate(level, maid, mine.getBlockPos());
+        travelToMineBlock(level, maid, mine);
     }
 
     // B3 取垫脚：就近矿井方块，从仓库取一组垫脚方块（到达判定同存矿）
@@ -607,7 +620,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             logTransition(maid, "挖矿循环", "取垫脚完成");
             return;
         }
-        navigate(level, maid, mine.getBlockPos());
+        travelToMineBlock(level, maid, mine);
     }
 
     // B3 取工具（§8 七步流程步骤4/7）：就近矿井方块，按规格从仓库取 1 把并装备；无货 → 气泡 + 阻塞等待
@@ -650,7 +663,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             logTransition(maid, "挖矿循环", "取工具完成");
             return;
         }
-        navigate(level, maid, mine.getBlockPos());
+        travelToMineBlock(level, maid, mine);
     }
 
     // ===================== §8 装备流程（2026-09-04 终版：可行性已在派发侧确认） =====================
@@ -948,6 +961,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     }
 
     // 传送到矿井方块旁的安全落点（优先正上方可站立处，其次四周相邻；兜底正上方）
+    // 多人场景优先落"没被其他女仆占着"的格子分散开（2026-09-04），带低音量传送音效
     private static void teleportNearMine(ServerLevel level, EntityMaid maid, MineInstance mine)
     {
         BlockPos base = mine.getBlockPos();
@@ -956,7 +970,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
                 base.above(), base.above(2),
                 base.north(), base.south(), base.east(), base.west()})
         {
-            if (level.getBlockState(cand).isAir() && level.getBlockState(cand.below()).isSolid())
+            if (!level.getBlockState(cand).isAir() || !level.getBlockState(cand.below()).isSolid()) continue;
+            if (target == null) target = cand;
+            AABB cell = new AABB(cand.getX(), cand.getY(), cand.getZ(),
+                    cand.getX() + 1, cand.getY() + 1, cand.getZ() + 1);
+            if (level.getEntitiesOfClass(EntityMaid.class, cell, e -> e != maid).isEmpty())
             {
                 target = cand;
                 break;
@@ -968,6 +986,66 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         }
         maid.getNavigation().stop();
         maid.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
+        level.playSound(null, maid.getX(), maid.getY(), maid.getZ(),
+                SoundEvents.ENDERMAN_TELEPORT, SoundSource.NEUTRAL, 0.3F, 1.0F);
+    }
+
+    // 控制器传送：落到指定控制器平台上方一格（兜底：周围可站立格；再兜底正上方）
+    private static void teleportNearHub(ServerLevel level, EntityMaid maid, BlockPos hub)
+    {
+        BlockPos target = null;
+        if (level.getBlockState(hub.above()).isAir() && level.getBlockState(hub).isSolid())
+        {
+            target = hub.above();
+        }
+        else
+        {
+            for (BlockPos cand : new BlockPos[]{
+                    hub.north(), hub.south(), hub.east(), hub.west(),
+                    hub.above(2), hub.north().above(), hub.south().above(),
+                    hub.east().above(), hub.west().above()})
+            {
+                if (level.getBlockState(cand).isAir() && level.getBlockState(cand.below()).isSolid())
+                {
+                    target = cand;
+                    break;
+                }
+            }
+        }
+        if (target == null) target = hub.above();
+        maid.getNavigation().stop();
+        maid.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
+        level.playSound(null, maid.getX(), maid.getY(), maid.getZ(),
+                SoundEvents.ENDERMAN_TELEPORT, SoundSource.NEUTRAL, 0.3F, 1.0F);
+        LOGGER.info("[MineDebug] 控制器传送 女仆={} → 控制器 {} 平台", shortId(maid), hub.toShortString());
+    }
+
+    // 去矿井方块（存矿/取货/暂停等待/挖尽等待的统一入口，2026-09-04 拍板）：
+    //   无控制方块 或 女仆 Y 高于最高控制方块 → 正常走路；
+    //   否则先走到离她最近的控制方块旁，再传送到矿井方块旁
+    // （传送是主动技、由状态门控触发，不设冷却）
+    private void travelToMineBlock(ServerLevel level, EntityMaid maid, MineInstance mine)
+    {
+        Integer topY = mine.controlTopY();
+        if (topY == null || maid.getY() > topY)
+        {
+            navigate(level, maid, mine.getBlockPos());
+            return;
+        }
+        BlockPos hub = mine.controlNearest(maid.blockPosition());
+        if (hub == null)
+        {
+            navigate(level, maid, mine.getBlockPos());
+            return;
+        }
+        if (isNear(maid, hub))
+        {
+            LOGGER.info("[MineDebug] 控制器传送 女仆={} → 矿井方块", shortId(maid));
+            teleportNearMine(level, maid, mine);
+            reachedTarget = false;
+            return;
+        }
+        navigate(level, maid, hub);
     }
 
     // 在目标方块附近找可站立的行走点（先同高度相邻，再上一层俯身）
