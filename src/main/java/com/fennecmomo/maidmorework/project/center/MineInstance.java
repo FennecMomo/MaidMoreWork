@@ -1,6 +1,8 @@
 package com.fennecmomo.maidmorework.project.center;
 
+import com.fennecmomo.maidmorework.project.ProjectBase;
 import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
+import com.fennecmomo.maidmorework.project.mine.MineShaftProject;
 import com.fennecmomo.maidmorework.project.mine.MineTask;
 import com.fennecmomo.maidmorework.project.mine.SpiralMinePlanner;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
@@ -428,6 +430,67 @@ public class MineInstance extends ProjectCenterInstance
 
     // ===================== 派活口（B1 拍板：中心决定"下一个坐标"） =====================
 
+    // ===================== 工程制派活（2026-09-04 拍板：竖井层/矿道都是工程） =====================
+
+    // 竖井层工程解析：已有分配且对应当前层 → 继续；否则加入现有当前层工程；没有则新建
+    // 返回 null = 不可派（层已到深度底/满员异常）
+    private MineShaftProject resolveShaftProject(ServerLevel level, EntityMaid maid, int y)
+    {
+        UUID maidUuid = maid.getUUID();
+        UUID assignedId = getAssignedProjectId(maidUuid);
+        if (assignedId != null)
+        {
+            ProjectBase p = ProjectCenterManager.findProject(assignedId, ProjectBase.class);
+            if (p instanceof MineShaftProject shaft && !shaft.isCompleted()
+                    && shaft.getCycle() == cycle && shaft.getLayerY() == y)
+            {
+                return shaft;
+            }
+            if (p instanceof MineShaftProject stale)
+            {
+                stale.markCompleted();      // 落后层残留工程：标记完成，等基类移除
+            }
+            unassignProject(maidUuid);
+        }
+        for (ProjectBase p : getManagedProjects())
+        {
+            if (!(p instanceof MineShaftProject shaft) || shaft.isCompleted()) continue;
+            if (shaft.getCycle() == cycle && shaft.getLayerY() == y)
+            {
+                if (shaft.claim(maidUuid))
+                {
+                    assignProject(maidUuid, shaft.getId());
+                    return shaft;
+                }
+                return null;
+            }
+            shaft.markCompleted();          // 落后层残留工程
+        }
+        MineShaftProject created = new MineShaftProject(
+                new BlockPos(getBlockPos().getX(), y, getBlockPos().getZ()), cycle, y);
+        created.setDimension(level.dimension());
+        if (!created.claim(maidUuid)) return null;
+        claimTargets(List.of(), created);
+        assignProject(maidUuid, created.getId());
+        LOGGER.info("[MineDebug] 新建竖井层工程 周期C{} 层#{} Y={} 女仆={}",
+                cycle, layerIndex, y, shortId(maidUuid));
+        return created;
+    }
+
+    // 层结算推进时标记对应竖井层工程完成（基类 doProjectTick 下一 tick 移除并清空分配 → 女仆随机再分配）
+    private void markShaftProjectComplete(int finCycle, int finLayerY)
+    {
+        for (ProjectBase p : getManagedProjects())
+        {
+            if (p instanceof MineShaftProject shaft && !shaft.isCompleted()
+                    && shaft.getCycle() == finCycle && shaft.getLayerY() == finLayerY)
+            {
+                shaft.markCompleted();
+                LOGGER.info("[MineDebug] 竖井层工程完工 周期C{} Y={}", finCycle, finLayerY);
+            }
+        }
+    }
+
     // 女仆请求推进（§6 派发树）：
     //   已绑定子任务 → 原样返回（恢复）
     //   0. 矿井困难表有能处理的 → 取走（§7：先于一切）
@@ -477,6 +540,10 @@ public class MineInstance extends ProjectCenterInstance
                     hard.type(), hard.pos().toShortString());
             return hard;
         }
+
+        // 0.5 工程解析（2026-09-04 拍板：一层竖井 = 一个工程，与矿道工程并行）
+        MineShaftProject shaft = resolveShaftProject(level, maid, y);
+        if (shaft == null) return null;
 
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
@@ -928,6 +995,8 @@ public class MineInstance extends ProjectCenterInstance
     private void advanceLayer(ServerLevel level)
     {
         reconcileLayerSeals();
+        // 竖井层工程完工标记（2026-09-04 拍板：层=工程，完工后基类清分配，女仆随机再分配）
+        markShaftProjectComplete(cycle, cycleLayerYs.get(layerIndex));
         for (BlockPos pos : layerHardList)
         {
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
@@ -1056,11 +1125,12 @@ public class MineInstance extends ProjectCenterInstance
 
     // ===================== 活跃任务熔断（2026-09-04 拍板） =====================
 
-    // 成员死亡处理（死亡事件入口）：归还绑定任务；成员资格由调用方 leaveCenter 处理
+    // 成员死亡处理（死亡事件入口）：归还绑定任务 + 释放工程席位；成员资格由调用方 leaveCenter 处理
     public void handleMemberLost(EntityMaid maid)
     {
         UUID uuid = maid.getUUID();
         MineTask task = releaseBoundTask(uuid);
+        releaseAssignment(maid);
         LOGGER.info("[MineDebug] 任务归还：女仆={} 死亡 任务={}", shortId(uuid),
                 task == null ? "无" : task.type() + " @ " + task.pos().toShortString());
     }
@@ -1337,6 +1407,7 @@ public class MineInstance extends ProjectCenterInstance
             if (level.getEntity(uuid) instanceof EntityMaid maid)
             {
                 releaseWork(maid);
+                releaseAssignment(maid);
                 ProjectCenterManager.releaseMaid(maid);
             }
         }

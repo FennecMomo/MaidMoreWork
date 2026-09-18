@@ -364,6 +364,26 @@ public class ProjectCenterInstance
     }
 
     // ===================== 工程分配 =====================
+    // 通用扫描式中心走 assignOrResume；矿井这类"计划驱动"的中心自行决定工程与分配，
+    // 这里开放最小读写口（2026-09-04：矿井工程制接入）
+
+    // 查看女仆当前分配到的工程 UUID（无则 null）
+    public UUID getAssignedProjectId(UUID maidUuid)
+    {
+        return assignments.get(maidUuid);
+    }
+
+    // 记录分配
+    public void assignProject(UUID maidUuid, UUID projectId)
+    {
+        assignments.put(maidUuid, projectId);
+    }
+
+    // 清除分配
+    public void unassignProject(UUID maidUuid)
+    {
+        assignments.remove(maidUuid);
+    }
 
     // 女仆请求工程：优先恢复已有 assignment，其次加入有空位的工程，最后新建
     // 返回 null 表示无可用目标（女仆应等待）

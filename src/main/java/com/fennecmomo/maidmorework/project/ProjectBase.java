@@ -43,6 +43,8 @@ public abstract class ProjectBase
         type -> switch (type)
         {
             case "chopping" -> ChoppingProject.MAP_CODEC;
+            case "mine_shaft" -> com.fennecmomo.maidmorework.project.mine.MineShaftProject.MAP_CODEC;
+            case "mine_tunnel" -> com.fennecmomo.maidmorework.project.mine.MineTunnelProject.MAP_CODEC;
             default -> throw new IllegalArgumentException("Unknown project type: " + type);
         });
 

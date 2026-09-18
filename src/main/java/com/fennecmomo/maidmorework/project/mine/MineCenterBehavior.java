@@ -1365,6 +1365,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             }
             if (ProjectCenterManager.getCenterOf(maid) == mine)
             {
+                mine.releaseAssignment(maid);
                 mine.leaveCenter(maid);
             }
         }
