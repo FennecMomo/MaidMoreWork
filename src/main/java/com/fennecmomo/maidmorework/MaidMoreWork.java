@@ -62,6 +62,7 @@ public class MaidMoreWork
                     output.accept(ProjectCenterRegistration.PROJECT_CENTER_MARKER.get());
                     output.accept(MineCenterRegistration.MINE_CENTER_BLOCK.get());
                     output.accept(MineCenterRegistration.MINE_CENTER_MARKER.get());
+                    output.accept(MineCenterRegistration.MINING_MAID_SPAWN_EGG.get());
                 })
                 .build());
     }

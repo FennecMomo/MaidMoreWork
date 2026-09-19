@@ -81,4 +81,10 @@ public class MineCenterRegistration
                     id -> new FluidBottleItem(new Item.Properties()
                             .setId(ResourceKey.create(Registries.ITEM, id))
                             .stacksTo(16)));
+
+    // 测试用刷怪蛋（2026-09-04）：生成自带小型背包、Home 模式、挖矿工作的女仆
+    public static final DeferredHolder<Item, com.fennecmomo.maidmorework.item.MiningMaidSpawnEggItem> MINING_MAID_SPAWN_EGG =
+            ITEMS.register("mining_maid_spawn_egg",
+                    id -> new com.fennecmomo.maidmorework.item.MiningMaidSpawnEggItem(new Item.Properties()
+                            .setId(ResourceKey.create(Registries.ITEM, id))));
 }
