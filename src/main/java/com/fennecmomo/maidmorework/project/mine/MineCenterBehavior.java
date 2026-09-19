@@ -271,16 +271,6 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             digProgress = 0f;
             digPos = null;
             logTransition(maid, "执行任务", task.type() + " @ " + task.pos().toShortString());
-            // 控制器传送（2026-09-04 拍板）：从中心出发干活——已有控制方块且人在中心附近 →
-            // 直接传送到离任务最近的控制器平台，再从那里走过去（任务在中心附近则跳过）
-            if (!isNear(maid, task.pos()) && isNear(maid, mine.getBlockPos()))
-            {
-                BlockPos hub = mine.controlNearest(task.pos());
-                if (hub != null)
-                {
-                    teleportNearHub(level, maid, hub);
-                }
-            }
         }
 
         MineTask task = currentTask;
@@ -299,6 +289,20 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             if (target.equals(mine.getBlockPos()))
             {
                 travelToMineBlock(level, maid, mine);
+            }
+            // 从中心出发干活（领取任务、取完货/放完货回任务统一在这里判断，2026-09-04 修正）：
+            // 已有控制方块、人在中心附近、目的地不在身边 → 直接传送到离目的地最近的控制器平台
+            else if (!isNear(maid, target) && isNear(maid, mine.getBlockPos()))
+            {
+                BlockPos hub = mine.controlNearest(target);
+                if (hub != null)
+                {
+                    teleportNearHub(level, maid, hub);
+                }
+                else
+                {
+                    navigate(level, maid, target);
+                }
             }
             else
             {
