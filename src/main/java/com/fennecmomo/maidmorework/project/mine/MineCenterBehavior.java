@@ -67,6 +67,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private static final long SCAFFOLD_KEY = 9540L;     // 垫脚气泡冷却 key
     private static final long LIGHT_KEY = 9541L;        // 光源气泡冷却 key
     private static final long PICKAXE_KEY = 9542L;      // 镐子气泡冷却 key
+    private static final long PAUSE_KEY = 9543L;        // 层暂停（缺工具）气泡冷却 key
 
     private UUID mineId = null;             // 所属矿井实例 ID
     private MineTask currentTask = null;    // 当前任务
@@ -78,6 +79,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     private int waitTicks = 0;              // 阻塞等待倒计时（取不到物资时）
     private boolean finished = false;       // 矿井失联 → 结束行为（挖尽为待机，不结束）
     private boolean exhaustedLogged = false; // 挖尽待机日志与放权只执行一次
+    private boolean finalDepositDone = false; // 结束矿井工作前的最终存货（挖尽/自行退出）
     private boolean pendingDeposit = false; // B3：背包满（产物入包后检测）→ 待去仓库存放
     private float digProgress = 0f;         // 真挖掘进度（2026-09-04 拍板：原版公式逐 tick 累计）
     private BlockPos digPos = null;         // 正在挖的坐标（换目标即重置进度与裂纹）
@@ -171,6 +173,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
+        finalDepositDone = false;
         pendingDeposit = false;
         digProgress = 0f;
         digPos = null;
@@ -209,9 +212,26 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
 
         if (mine.isExhausted() && !mine.hasPendingTunnels())
         {
+            // 结束矿井工作前先存货（2026-09-04 拍板）：一次性最终存矿，存完再释放
+            if (tryFinalDeposit(level, maid, mine)) return;
+            if (!exhaustedLogged)
+            {
+                exhaustedLogged = true;
+                maid.getChatBubbleManager().addTextChatBubble("矿井已挖尽");
+            }
             mine.releaseAllMembers(level);
             finished = true;
             logTransition(maid, "结束", "矿井已挖尽且矿道全完工，释放全部成员");
+            return;
+        }
+
+        // 女仆自行退出矿井（API，2026-09-04 预留：供后续女仆 AI 逻辑调用；先存货再退出）
+        if (mine.consumeLeaveRequest(maid.getUUID()))
+        {
+            if (tryFinalDeposit(level, maid, mine)) return;
+            mine.releaseAssignment(maid);
+            finished = true;
+            logTransition(maid, "结束", "女仆自行退出矿井（最终存货完成）");
             return;
         }
 
@@ -247,6 +267,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (mine.isLayerPaused() && currentTask == null)
         {
             logTransition(maid, "暂停等待", "层不可处理方块超过10%，等待补货");
+            showBubbleWithCooldown(maid, "缺：" + mine.missingToolsSummary() + "，等待补货", PAUSE_KEY);
             if (!isNear(maid, mine.getBlockPos())) travelToMineBlock(level, maid, mine);
             return;
         }
@@ -594,6 +615,26 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
     }
 
     // ===================== 存取支线 =====================
+
+    // 结束矿井工作前的最终存货（2026-09-04 拍板）：走到中心入库后再释放/退出；
+    // 返回 true = 本轮仍在存货（调用方直接 return），false = 存完可以继续
+    private boolean tryFinalDeposit(ServerLevel level, EntityMaid maid, MineInstance mine)
+    {
+        if (finalDepositDone) return false;
+        if (isNear(maid, mine.getBlockPos()) || reachedTarget)
+        {
+            depositToWarehouse(mine, maid, level);
+            finalDepositDone = true;
+            reachedTarget = false;
+            logTransition(maid, "挖矿循环", "最终存货完成");
+        }
+        else
+        {
+            logTransition(maid, "存矿", "返回中心做最终存货");
+            travelToMineBlock(level, maid, mine);
+        }
+        return true;
+    }
 
     // B3 存矿：就近矿井方块，黑名单外全部入仓
     // 到达判定：isNear 或导航熔断（reachedTarget）——熔断后按"已到达"继续执行，不取消任务
@@ -1523,6 +1564,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         if (mine != null)
         {
             mine.reportTravelGoal(maid.getUUID(), null);
+            mine.consumeLeaveRequest(maid.getUUID());     // 丢弃未消费的自行退出请求（停止即失效）
             if (currentTask != null)
             {
                 BlockPos pos = currentTask.pos();
@@ -1555,6 +1597,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         waitTicks = 0;
         finished = false;
         exhaustedLogged = false;
+        finalDepositDone = false;
         pendingDeposit = false;
         digProgress = 0f;
         digPos = null;

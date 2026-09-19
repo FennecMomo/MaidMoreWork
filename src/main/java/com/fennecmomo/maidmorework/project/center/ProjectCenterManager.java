@@ -212,7 +212,7 @@ public final class ProjectCenterManager
         }
         // 客户端清空信息面板
         PacketDistributor.sendToAllPlayers(
-                new ProjectCenterInfoPayload(removed.getBlockPos(), "", 0, 0, 0, "", List.of()));
+                new ProjectCenterInfoPayload(removed.getBlockPos(), "", 0, 0, 0, "", List.of(), false));
     }
 
     // 方块实体加载时确保实例存在（SavedData 意外丢失时按身份重建）

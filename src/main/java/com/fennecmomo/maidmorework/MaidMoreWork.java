@@ -121,7 +121,8 @@ public class MaidMoreWork
                             ProjectClientHelper.CENTERS.put(payload.centerPos(),
                                     new ProjectClientHelper.CenterInfo(
                                             payload.typeName(), payload.projectCount(), payload.maidCount(),
-                                            payload.radius(), payload.name(), payload.missingTools()));
+                                            payload.radius(), payload.name(), payload.missingTools(),
+                                            payload.exhausted()));
                         }
                     }
             );

@@ -25,7 +25,7 @@ public final class ProjectClientHelper
     // 远处中心的数据覆盖进来时面板因距离门限被隐藏，下一包换回近处中心又出现，表现为闪烁。
     // 改为按中心缓存 + 各自渲染面板，彻底消除覆盖问题。
     public record CenterInfo(String typeName, int projectCount, int maidCount, int radius, String name,
-                             java.util.List<String> missingTools) {}
+                             java.util.List<String> missingTools, boolean exhausted) {}
 
     public static final Map<BlockPos, CenterInfo> CENTERS = new ConcurrentHashMap<>();
 

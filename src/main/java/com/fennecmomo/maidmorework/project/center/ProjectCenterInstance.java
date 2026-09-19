@@ -809,7 +809,7 @@ public class ProjectCenterInstance
                 String typeName = type != null ? type.displayName().getString() : projectTypeId;
                 var info = new ProjectCenterInfoPayload(
                         getBlockPos(), typeName, managedProjects.size(), savedHomes.size(), getRadius(), getName(),
-                        infoMissingTools());
+                        infoMissingTools(), infoExhausted());
                 PacketDistributor.sendToAllPlayers(info);
             }
         }
@@ -830,6 +830,12 @@ public class ProjectCenterInstance
     protected List<String> infoMissingTools()
     {
         return List.of();
+    }
+
+    // 信息包附加状态（子类覆写：矿井挖尽后面板显示"已挖尽"）
+    protected boolean infoExhausted()
+    {
+        return false;
     }
 
     public UUID getId() { return id; }

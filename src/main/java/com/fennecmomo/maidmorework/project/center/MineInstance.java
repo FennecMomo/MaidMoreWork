@@ -12,7 +12,9 @@ import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.BlockItem;
@@ -511,13 +513,21 @@ public class MineInstance extends ProjectCenterInstance
     }
 
     // 竖井窗口（2026-09-04 拍板）：当前层 + 往下两层，跨周期无缝；i=0 为当前层
-    // 返回 [cycle, layerY]，越界返回 null
+    // 返回 [cycle, layerY]，越界或低于深度底返回 null（2026-09-04 修正：预挖层不得超出矿井深度范围）
     private int[] windowLayer(int i)
     {
         int idx = layerIndex + i;
-        if (idx < cycleLayerYs.size()) return new int[]{cycle, cycleLayerYs.get(idx)};
+        if (idx < cycleLayerYs.size())
+        {
+            int y = cycleLayerYs.get(idx);
+            return y < depthBottomY() ? null : new int[]{cycle, y};
+        }
         int rem = idx - cycleLayerYs.size();
-        if (rem < nextCycleLayerYs.size()) return new int[]{cycle + 1, nextCycleLayerYs.get(rem)};
+        if (rem < nextCycleLayerYs.size())
+        {
+            int y = nextCycleLayerYs.get(rem);
+            return y < depthBottomY() ? null : new int[]{cycle + 1, y};
+        }
         return null;
     }
 
@@ -541,7 +551,7 @@ public class MineInstance extends ProjectCenterInstance
                 {
                     int y = cell.getY();
                     if (y != firstLayerY && isCornerCell(cell, cx, cz, p)) continue;
-                    BlockPos rail = railCell(cell, cx, cz);
+                    BlockPos rail = railCell(cell, edge);
                     if (rail == null) continue;
                     Set<BlockPos> sameLayer = keepsByY.getOrDefault(y, Set.of());
                     if (sameLayer.contains(rail)) continue;      // 内侧紧邻仍是保留格（走道内排）→ 不是外缘
@@ -566,17 +576,18 @@ public class MineInstance extends ProjectCenterInstance
         return Math.abs(cell.getX() - cx) >= halfL - 1 && Math.abs(cell.getZ() - cz) >= halfW - 1;
     }
 
-    // 朝矿井中心方向扩一格（取离中心更远的那条轴作为外缘方向，往里一格即栏杆位）
-    private static BlockPos railCell(BlockPos cell, int cx, int cz)
+    // 朝矿井中心方向扩一格（按边定方向，2026-09-04 修正：按轴推在角上会推错方向；只有第一层有角平台栏杆，
+    // 按边定后首层角平台自然得到 2 格宽、与同边其余栏杆方向一致的墙体）
+    private static BlockPos railCell(BlockPos cell, int edge)
     {
-        int dx = cell.getX() - cx;
-        int dz = cell.getZ() - cz;
-        if (dx == 0 && dz == 0) return null;
-        if (Math.abs(dx) >= Math.abs(dz))
+        return switch (edge)
         {
-            return cell.offset(dx > 0 ? -1 : 1, 0, 0);
-        }
-        return cell.offset(0, 0, dz > 0 ? -1 : 1);
+            case 0 -> cell.offset(0, 0, 1);     // 北边：往 +Z（中心方向）
+            case 1 -> cell.offset(1, 0, 0);     // 西边：往 +X
+            case 2 -> cell.offset(0, 0, -1);    // 南边：往 -Z
+            case 3 -> cell.offset(-1, 0, 0);    // 东边：往 -X
+            default -> null;
+        };
     }
 
     // 在矿区边界向外加一圈保留方块形成围墙
@@ -1067,7 +1078,7 @@ public class MineInstance extends ProjectCenterInstance
         int currentY = cycleLayerYs.get(layerIndex);
         if (currentY < depthBottomY())
         {
-            markExhausted();
+            markExhausted(level);
             return null;
         }
 
@@ -2178,6 +2189,13 @@ public class MineInstance extends ProjectCenterInstance
         return List.copyOf(missingToolNotes);
     }
 
+    // 面板"已挖尽"状态（2026-09-04 拍板）
+    @Override
+    protected boolean infoExhausted()
+    {
+        return exhausted;
+    }
+
     // 该坐标是否保留位（当前周期缓存命中，或位于围墙环上）——流体处理（是否补垫脚）用
     public boolean isKeepPosition(BlockPos pos)
     {
@@ -2209,12 +2227,52 @@ public class MineInstance extends ProjectCenterInstance
         return net.minecraft.core.Direction.EAST;
     }
 
-    public void markExhausted()
+    public void markExhausted(ServerLevel level)
     {
+        if (exhausted) return;
         this.exhausted = true;
         layerSubtasks.clear();
         LOGGER.info("[MineDebug] 矿井已挖尽 周期C{} 层#{} 困难表{} 空置封存{} 实体封存{}",
                 cycle, layerIndex, mineHardTasks.size(), sealedAir.size(), sealedSolid.size());
+        // 挖尽提示（2026-09-04 拍板）：给所有者 + 附近玩家发一条聊天消息（只发一次）
+        Component msg = Component.literal("§e[矿井] §f矿井已挖尽，女仆已完成全部竖井挖掘。");
+        ServerPlayer owner = level.getServer().getPlayerList().getPlayer(getOwner());
+        if (owner != null) owner.sendSystemMessage(msg);
+        for (ServerPlayer player : level.players())
+        {
+            if (player != owner && player.blockPosition().distSqr(getBlockPos()) <= 64 * 64)
+            {
+                player.sendSystemMessage(msg);
+            }
+        }
+    }
+
+    // 缺工具摘要（气泡用，2026-09-04）：把"镐 示例: xxx"这类备注压成简短清单
+    public String missingToolsSummary()
+    {
+        java.util.LinkedHashSet<String> kinds = new java.util.LinkedHashSet<>();
+        for (String note : missingToolNotes)
+        {
+            int sp = note.indexOf(' ');
+            kinds.add(sp > 0 ? note.substring(0, sp) : note);
+        }
+        return kinds.isEmpty() ? "工具" : String.join("、", kinds);
+    }
+
+    // ===================== 女仆自行退出矿井（API，2026-09-04 预留） =====================
+    // 供后续女仆 AI 逻辑调用：行为侧消费后先做最终存货，再退出矿井；
+    // 玩家更改任务/收起/死亡等路径不走这里（stop 会丢弃未消费的请求）
+
+    private final Set<UUID> leaveRequests = new HashSet<>();
+
+    public void requestLeave(EntityMaid maid)
+    {
+        leaveRequests.add(maid.getUUID());
+    }
+
+    public boolean consumeLeaveRequest(UUID maidUuid)
+    {
+        return leaveRequests.remove(maidUuid);
     }
 
     // ===================== 调试 =====================

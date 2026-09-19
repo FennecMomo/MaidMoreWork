@@ -77,6 +77,10 @@ public final class ProjectHudRenderer
             {
                 lines.add(Component.literal("§c缺少: " + String.join("、", info.missingTools())));
             }
+            if (info.exhausted())
+            {
+                lines.add(Component.literal("§e已挖尽"));
+            }
             BillboardRenderer.render(buf, ps, mc.font, lines,
                     MaidMoreWorkConfig.PANEL_SEE_THROUGH_LIGHT, 0.5f);
 
