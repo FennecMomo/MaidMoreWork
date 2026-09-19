@@ -2,10 +2,18 @@ package com.fennecmomo.maidmorework.project.mine;
 
 import com.mojang.serialization.MapCodec;
 
+import com.fennecmomo.maidmorework.project.center.CenterWarehouseContainer;
+import com.fennecmomo.maidmorework.project.center.MineInstance;
+import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -57,18 +65,41 @@ public class MineCenterBlock extends com.fennecmomo.maidmorework.project.center.
         if (level.isClientSide()) return InteractionResult.SUCCESS;
         if (level.getBlockEntity(pos) instanceof MineCenterBlockEntity be && be.hasInstance())
         {
-            String anchorStr = switch (be.getAnchor())
+            // 潜行右键 = 信息；普通右键 = 打开仓库 UI（2026-09-04 拍板）
+            if (player.isShiftKeyDown())
             {
-                case 0 -> "顶部";
-                case 2 -> "底部";
-                default -> "中心";
-            };
-            player.sendSystemMessage(Component.literal(
-                    "§b矿井中心 | §fID: " + be.getId().toString().substring(0, 8)
-                    + "§b, 竖井: §f" + be.getShaftLength() + "x" + be.getShaftWidth()
-                    + "§b, 边界半径: §f" + be.getRadius()
-                    + "§b, 基准点: §f" + anchorStr
-                    + (be.isExhausted() ? "§c, 已挖尽" : "")));
+                String anchorStr = switch (be.getAnchor())
+                {
+                    case 0 -> "顶部";
+                    case 2 -> "底部";
+                    default -> "中心";
+                };
+                player.sendSystemMessage(Component.literal(
+                        "§b矿井中心 | §fID: " + be.getId().toString().substring(0, 8)
+                        + "§b, 竖井: §f" + be.getShaftLength() + "x" + be.getShaftWidth()
+                        + "§b, 边界半径: §f" + be.getRadius()
+                        + "§b, 基准点: §f" + anchorStr
+                        + (be.isExhausted() ? "§c, 已挖尽" : "")));
+                return InteractionResult.CONSUME;
+            }
+            if (level instanceof ServerLevel serverLevel
+                    && ProjectCenterManager.get(serverLevel, be.getId()) instanceof MineInstance mine
+                    && player instanceof ServerPlayer serverPlayer)
+            {
+                CenterWarehouseContainer container = new CenterWarehouseContainer(mine);
+                container.compact();
+                int entries = container.entryCount();
+                serverPlayer.openMenu(new SimpleMenuProvider(
+                        (id, inv, p) -> ChestMenu.sixRows(id, inv, container),
+                        Component.literal("矿井仓库")));
+                if (entries > CenterWarehouseContainer.SLOTS)
+                {
+                    serverPlayer.sendSystemMessage(Component.literal(
+                            "§e仓库条目 " + entries + " 超过 " + CenterWarehouseContainer.SLOTS
+                            + " 格，界面只显示前 " + CenterWarehouseContainer.SLOTS + " 格（其余保留）"));
+                }
+                return InteractionResult.CONSUME;
+            }
         }
         return InteractionResult.CONSUME;
     }
