@@ -365,6 +365,23 @@ public class MineInstance extends ProjectCenterInstance
                     }
                 }
             }
+
+            // 顶层平台两侧挡墙（2026-09-04 拍板）：矿井方块所在支撑带两侧各一道 2 格高墙，两端留口
+            int cz0 = getBlockPos().getZ();
+            Set<BlockPos> wallY = keepsByY.computeIfAbsent(mineY, key -> new HashSet<>());
+            Set<BlockPos> wallY1 = keepsByY.computeIfAbsent(mineY + 1, key -> new HashSet<>());
+            for (int x = p.getMinX(); x <= p.getMaxX(); x++)
+            {
+                for (int dz : new int[]{-2, 2})
+                {
+                    BlockPos w1 = new BlockPos(x, mineY, cz0 + dz);
+                    BlockPos w2 = new BlockPos(x, mineY + 1, cz0 + dz);
+                    wallY.add(w1);
+                    wallY1.add(w2);
+                    if (!sealedSolid.contains(w1)) sealAs(w1, sealedSolid);
+                    if (!sealedSolid.contains(w2)) sealAs(w2, sealedSolid);
+                }
+            }
         }
 
         // 边界围墙：mineY 以下每层向外一圈（入口区保持开放）
@@ -376,9 +393,37 @@ public class MineInstance extends ProjectCenterInstance
             }
         }
 
-        // 光源（2026-09-04 拍板）：只在每条边中段的 3×2 平台处放，每平台 2 盏（每周期 8 盏）
-        // 灯1 = 平台中柱走廊侧外一格，贴平台侧面（平台=保留区，支撑永久）
-        // 灯2 = 平台端柱上方三格(y+3)，贴边界围墙内面（围墙=保留区，支撑永久；高于墙区的层跳过）
+        // 走道内侧栏杆（2026-09-04 拍板）：每层保留格朝中心扩 1 格成栏杆位（地板延展）+ 往上 2 格实心；
+        // 转角 2×2 平台不加（会挡转弯）；首层（矿井方块正下方那层 = 周期 0 第一层）例外
+        addRailings(keepsByY, cycle, cycle == 0 ? mineY - 1 : Integer.MIN_VALUE);
+        // 历史周期补栏杆（幂等）：已挖过的层靠 10s 实体封存检查把栏杆补砌起来
+        for (int c = 0; c < cycle; c++)
+        {
+            Map<Integer, Set<BlockPos>> past = new HashMap<>();
+            int pn = 0;
+            int pidx = 0;
+            int plimit = edgeStepLimit(pn);
+            while (true)
+            {
+                for (BlockPos k : p.getKeepBlocks(c, pn, pidx))
+                {
+                    past.computeIfAbsent(k.getY(), key -> new HashSet<>()).add(k.immutable());
+                }
+                pidx++;
+                if (pidx > plimit)
+                {
+                    pn++;
+                    if (pn > 3) break;
+                    pidx = 0;
+                    plimit = edgeStepLimit(pn);
+                }
+            }
+            addRailings(past, c, Integer.MIN_VALUE);
+        }
+
+        // 光源（2026-09-04 拍板，同日修正）：只在每条边中段的 3×2 平台处放，每平台 1 盏（灯2）：
+        //   灯2 = 平台端柱上方三格(y+3)，贴边界围墙内面（围墙=保留区，支撑永久；高于墙区的层跳过）
+        //   灯1（平台内侧那根）已取消——位置被走道内侧栏杆占用
         // 旧方案（每层过道行放灯）作废：灯踩着的支撑方块属于下层挖掘区，下层一挖灯就掉
         int cx = getBlockPos().getX();
         int cz = getBlockPos().getZ();
@@ -401,7 +446,6 @@ public class MineInstance extends ProjectCenterInstance
             {
                 case 0 -> // 北边：平台行 z=minZ..minZ+1，墙在 minZ-1
                 {
-                    lights.add(new BlockPos(cx, h, p.getMinZ() + 2));
                     if (h + 3 < mineY)
                     {
                         lights.add(new BlockPos(cx, h + 3, p.getMinZ()));
@@ -409,7 +453,6 @@ public class MineInstance extends ProjectCenterInstance
                 }
                 case 2 -> // 南边：平台行 z=maxZ-1..maxZ，墙在 maxZ+1
                 {
-                    lights.add(new BlockPos(cx, h, p.getMaxZ() - 2));
                     if (h + 3 < mineY)
                     {
                         lights.add(new BlockPos(cx, h + 3, p.getMaxZ()));
@@ -417,7 +460,6 @@ public class MineInstance extends ProjectCenterInstance
                 }
                 case 1 -> // 西侧（planner case1：列 x=minX..minX+1），墙在 minX-1，沿 z 行进
                 {
-                    lights.add(new BlockPos(p.getMinX() + 2, h, cz));
                     if (h + 3 < mineY)
                     {
                         lights.add(new BlockPos(p.getMinX(), h + 3, cz));
@@ -425,7 +467,6 @@ public class MineInstance extends ProjectCenterInstance
                 }
                 case 3 -> // 东侧（planner case3：列 x=maxX-1..maxX），墙在 maxX+1
                 {
-                    lights.add(new BlockPos(p.getMaxX() - 2, h, cz));
                     if (h + 3 < mineY)
                     {
                         lights.add(new BlockPos(p.getMaxX(), h + 3, cz));
@@ -440,6 +481,64 @@ public class MineInstance extends ProjectCenterInstance
 
         // 重载恢复等场景的越界保护
         if (layerIndex >= cycleLayerYs.size()) layerIndex = 0;
+    }
+
+    // 走道内侧栏杆（2026-09-04 拍板）：每层保留格朝中心扩 1 格成栏杆位（地板延展），
+    // 该格并入保留区并往上再放 2 格实心（2 格高墙，防女仆被挤进竖井）；
+    // 楼梯交汇的 2×2 平台（矿井四角）不加（会挡转弯），首层（firstLayerY）例外；
+    // 同时清理旧"灯1"封存（灯1 已取消，位置被栏杆占用）
+    private void addRailings(Map<Integer, Set<BlockPos>> keepsByY, int cycleIndex, int firstLayerY)
+    {
+        int cx = getBlockPos().getX();
+        int cz = getBlockPos().getZ();
+        SpiralMinePlanner p = planner();
+        for (int edge = 0; edge <= 3; edge++)
+        {
+            int limit = (edge % 2 == 0)
+                    ? Math.max(0, p.getL() - 3)
+                    : Math.max(0, p.getW() - 3);
+            for (int idx = 0; idx <= limit; idx++)
+            {
+                for (BlockPos cell : p.getKeepBlocks(cycleIndex, edge, idx))
+                {
+                    int y = cell.getY();
+                    if (y != firstLayerY && isCornerCell(cell, cx, cz, p)) continue;
+                    BlockPos rail = railCell(cell, cx, cz);
+                    if (rail == null) continue;
+                    Set<BlockPos> sameLayer = keepsByY.getOrDefault(y, Set.of());
+                    if (sameLayer.contains(rail)) continue;      // 内侧紧邻仍是保留格（走道内排）→ 不是外缘
+                    for (int dy = 0; dy <= 2; dy++)
+                    {
+                        BlockPos pos = new BlockPos(rail.getX(), y + dy, rail.getZ());
+                        keepsByY.computeIfAbsent(pos.getY(), key -> new HashSet<>()).add(pos);
+                        if (!sealedSolid.contains(pos)) sealAs(pos, sealedSolid);   // 已处理层靠 10s 检查补砌
+                        sealedLights.remove(pos);                  // 旧灯1 封存清理
+                        sealedFloorLights.remove(pos);
+                    }
+                }
+            }
+        }
+    }
+
+    // 该格是否落在矿井四角的 2×2 楼梯交汇平台内
+    private static boolean isCornerCell(BlockPos cell, int cx, int cz, SpiralMinePlanner p)
+    {
+        int halfL = (p.getL() - 1) / 2;
+        int halfW = (p.getW() - 1) / 2;
+        return Math.abs(cell.getX() - cx) >= halfL - 1 && Math.abs(cell.getZ() - cz) >= halfW - 1;
+    }
+
+    // 朝矿井中心方向扩一格（取离中心更远的那条轴作为外缘方向，往里一格即栏杆位）
+    private static BlockPos railCell(BlockPos cell, int cx, int cz)
+    {
+        int dx = cell.getX() - cx;
+        int dz = cell.getZ() - cz;
+        if (dx == 0 && dz == 0) return null;
+        if (Math.abs(dx) >= Math.abs(dz))
+        {
+            return cell.offset(dx > 0 ? -1 : 1, 0, 0);
+        }
+        return cell.offset(0, 0, dz > 0 ? -1 : 1);
     }
 
     // 在矿区边界向外加一圈保留方块形成围墙
