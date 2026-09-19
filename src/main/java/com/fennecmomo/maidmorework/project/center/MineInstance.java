@@ -171,19 +171,29 @@ public class MineInstance extends ProjectCenterInstance
     private final List<BlockPos> sealedFloorLights = new ArrayList<>();
     private final List<ControlEntry> sealedControls = new ArrayList<>();
 
+    // 封存按层索引（运行时，2026-09-04 拍板"每帧扫一层"）：层 Y → 该层四类封存集合，
+    // sealAs/unseal 同步维护，读档后按平铺列表重建；每 tick 检查一层，全矿一轮约 2~3 秒
+    private static final class LayerSeals
+    {
+        final Set<BlockPos> air = new HashSet<>();
+        final Set<BlockPos> solid = new HashSet<>();
+        final Set<BlockPos> lights = new HashSet<>();
+        final Set<BlockPos> floorLights = new HashSet<>();
+    }
+
+    private final Map<Integer, LayerSeals> sealsByLayer = new HashMap<>();
+    private List<Integer> sealLayerOrder = new ArrayList<>();
+    private boolean sealOrderDirty = true;
+    private boolean sealIndexBuilt = false;
+    private int sealLayerCursor = 0;
+    private int openAirCursor = 0;      // 露天列清理轮询游标（每 10 秒一条矿道）
+
     // 矿道完工缓存（控制方块位置 → 已挖完；避免每次找活重复扫描已完成矿道）
     private final Set<BlockPos> tunnelDone = new HashSet<>();
 
-    // 10s 记录位置检查（分片轮询，游标不持久化）
+    // 10s 周期维护（分片轮询已改为"每 tick 扫一层"，见 checkSealsOneLayer）
     private static final int REFRESH_INTERVAL_TICKS = 200;  // 10 秒
-    private static final int REFRESH_SLICE = 256;           // 每轮每列表检查分片
     private long lastRefreshGameTime = 0;
-    private int airCursor = 0;
-    private int solidCursor = 0;
-    private int lightCursor = 0;
-    private int floorLightCursor = 0;
-    private int controlCursor = 0;
-    private int openAirCursor = 0;
 
     // 卡死熔断采样（2026-09-04 拍板：由矿井侧承担——只有矿井方块的状态绝对稳定，5 秒一次）
     // 女仆距目标无进展累计 10 秒 → 下发一次性通知，行为侧消费后传送至矿井方块旁并重置导航状态
@@ -1021,6 +1031,14 @@ public class MineInstance extends ProjectCenterInstance
         // 4) 挖格全清 + 火把全亮 → 完工
         tunnel.markCompleted();
         tunnelDone.add(tunnel.getPosition());
+        // 隧道空气格封存（2026-09-04 拍板）：把"本来就空气"的格子也封上，掉东西/回填能被检查发现
+        ensureSealIndex();
+        for (BlockPos pos : plan.dig())
+        {
+            LayerSeals ls = sealsByLayer.get(pos.getY());
+            if (ls != null && ls.air.contains(pos)) continue;
+            sealAs(pos, sealedAir);
+        }
         LOGGER.info("[MineDebug] 矿道完工 周期C{} Y={} 边={} 控制方块={}",
                 tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge(),
                 tunnel.getPosition().toShortString());
@@ -1314,7 +1332,7 @@ public class MineInstance extends ProjectCenterInstance
         mineHardTasks.removeIf(t -> t.pos().equals(task.pos()));
     }
 
-    // 封存坐标：先清各张 BlockPos 封存列表 + 控制封存记录中的同格，再按类别入表
+    // 封存坐标：先清各张 BlockPos 封存列表 + 控制封存记录中的同格，再按类别入表（同步层索引）
     private void sealAs(BlockPos pos, List<BlockPos> target)
     {
         BlockPos immutable = pos.immutable();
@@ -1324,6 +1342,21 @@ public class MineInstance extends ProjectCenterInstance
         sealedFloorLights.remove(immutable);
         sealedControls.removeIf(e -> e.pos().equals(immutable));
         target.add(immutable);
+        LayerSeals ls = sealsByLayer.get(immutable.getY());
+        if (ls == null)
+        {
+            ls = new LayerSeals();
+            sealsByLayer.put(immutable.getY(), ls);
+            sealOrderDirty = true;
+        }
+        ls.air.remove(immutable);
+        ls.solid.remove(immutable);
+        ls.lights.remove(immutable);
+        ls.floorLights.remove(immutable);
+        if (target == sealedAir) ls.air.add(immutable);
+        else if (target == sealedSolid) ls.solid.add(immutable);
+        else if (target == sealedLights) ls.lights.add(immutable);
+        else if (target == sealedFloorLights) ls.floorLights.add(immutable);
     }
 
     // 控制位封存（带周期/层/边）：完成/重核时调用；已有记录沿用其元数据（跨周期补放不丢周期信息）
@@ -1746,6 +1779,8 @@ public class MineInstance extends ProjectCenterInstance
         super.tick(level);
         long now = level.getGameTime();
         rescueBuriedMaids(level);
+        // 封存检查（每 tick 一层，2026-09-04 改版：分摊负载，全矿一轮约 2~3 秒）
+        checkSealsOneLayer(level);
         if (lastStuckSampleTime == 0) lastStuckSampleTime = now;
         if (now - lastStuckSampleTime >= STUCK_SAMPLE_TICKS)
         {
@@ -1760,8 +1795,8 @@ public class MineInstance extends ProjectCenterInstance
         }
         if (now - lastRefreshGameTime < REFRESH_INTERVAL_TICKS) return;
         lastRefreshGameTime = now;
-        refreshSealedLists(level);
         if (!layerPaused.isEmpty()) tryResumePausedLayers(level);
+        refreshTunnelUpkeep(level);
     }
 
     // 行为侧每 tick 上报"当前要去的地方"（#23 修正 2026-09-04）：null = 原地待命/等待，
@@ -2012,28 +2047,62 @@ public class MineInstance extends ProjectCenterInstance
         return (p.getMaxX() - p.getMinX() + 3) * (p.getMaxZ() - p.getMinZ() + 3);
     }
 
-    // 检查封存列表（2026-09-04 拍板：新增光源位封存——灯被打掉 → 重派 SETLIGHT 而非补垫脚）
-    // 分片轮询（每轮每列表至多 REFRESH_SLICE 格），单 tick 成本恒定，游标跨轮持续推进
-    private void refreshSealedLists(ServerLevel level)
+    // 封存检查改版（2026-09-04 拍板）：每 tick 检查一个层，全矿一轮约 2~3 秒（原先 10s 只扫 256 格，
+    // 八千多条要 5 分钟）；挖尽且矿道全完工后暂停（玩家手动扩半径 → 矿道重新激活 → 自动恢复）
+    private void checkSealsOneLayer(ServerLevel level)
     {
-        int airEnd = checkSealedSlice(level, sealedAir, airCursor, MineTask.Type.DESTROY, false);
-        airCursor = airEnd;
-        int solidEnd = checkSealedSlice(level, sealedSolid, solidCursor, MineTask.Type.FILL, true);
-        solidCursor = solidEnd;
-        int lightEnd = checkSealedSlice(level, sealedLights, lightCursor, MineTask.Type.SETLIGHT, true);
-        lightCursor = lightEnd;
-        int floorLightEnd = checkSealedSlice(level, sealedFloorLights, floorLightCursor,
-                MineTask.Type.SETLIGHT_FLOOR, true);
-        floorLightCursor = floorLightEnd;
-        int controlEnd = checkControlSlice(level, controlCursor);
-        controlCursor = controlEnd;
-        // 露天列清理（每 10 秒轮询一条矿道，2026-09-04 修正）
-        if (!sealedControls.isEmpty())
+        if (exhausted && !hasPendingTunnels()) return;
+        ensureSealIndex();
+        if (sealOrderDirty)
         {
-            if (openAirCursor >= sealedControls.size()) openAirCursor = 0;
-            cleanupOpenAirTunnel(level, sealedControls.get(openAirCursor));
-            openAirCursor++;
+            sealOrderDirty = false;
+            sealLayerOrder = new ArrayList<>(sealsByLayer.keySet());
+            sealLayerOrder.sort(Comparator.reverseOrder());
+            if (sealLayerCursor >= sealLayerOrder.size()) sealLayerCursor = 0;
         }
+        if (sealLayerOrder.isEmpty()) return;
+        if (sealLayerCursor >= sealLayerOrder.size()) sealLayerCursor = 0;
+        int y = sealLayerOrder.get(sealLayerCursor);
+        sealLayerCursor++;
+        LayerSeals ls = sealsByLayer.get(y);
+        if (ls == null) return;
+        checkLayerSeals(level, ls.air, MineTask.Type.DESTROY, false);
+        checkLayerSeals(level, ls.solid, MineTask.Type.FILL, true);
+        checkLayerSeals(level, ls.lights, MineTask.Type.SETLIGHT, true);
+        checkLayerSeals(level, ls.floorLights, MineTask.Type.SETLIGHT_FLOOR, true);
+        checkControlSealsOfLayer(level, y);
+    }
+
+    // 读档后按平铺列表重建层索引（幂等，仅一次）
+    private void ensureSealIndex()
+    {
+        if (sealIndexBuilt) return;
+        sealIndexBuilt = true;
+        for (BlockPos p : sealedAir) indexAdd(p, sealedAir);
+        for (BlockPos p : sealedSolid) indexAdd(p, sealedSolid);
+        for (BlockPos p : sealedLights) indexAdd(p, sealedLights);
+        for (BlockPos p : sealedFloorLights) indexAdd(p, sealedFloorLights);
+        sealOrderDirty = true;
+    }
+
+    private void indexAdd(BlockPos pos, List<BlockPos> target)
+    {
+        LayerSeals ls = sealsByLayer.computeIfAbsent(pos.getY(), k -> new LayerSeals());
+        if (target == sealedSolid) ls.solid.add(pos);
+        else if (target == sealedLights) ls.lights.add(pos);
+        else if (target == sealedFloorLights) ls.floorLights.add(pos);
+        else ls.air.add(pos);
+    }
+
+    // 隧道周期维护（每 10 秒一条矿道）：露天列清理；
+    // 挖尽且矿道全完工后暂停，玩家手动扩半径（清 tunnelDone）后自动恢复
+    private void refreshTunnelUpkeep(ServerLevel level)
+    {
+        if (sealedControls.isEmpty()) return;
+        if (exhausted && !hasPendingTunnels()) return;
+        if (openAirCursor >= sealedControls.size()) openAirCursor = 0;
+        cleanupOpenAirTunnel(level, sealedControls.get(openAirCursor));
+        openAirCursor++;
     }
 
     // 露天列清理（2026-09-04 修正）：矿道露天部分此前被封"实体地板"并被女仆垫了垫脚石，
@@ -2058,7 +2127,7 @@ public class MineInstance extends ProjectCenterInstance
         }
     }
 
-    // 解除单格封存（不动控制方块记录）
+    // 解除单格封存（不动控制方块记录；同步层索引）
     private void unseal(BlockPos pos)
     {
         BlockPos immutable = pos.immutable();
@@ -2066,26 +2135,31 @@ public class MineInstance extends ProjectCenterInstance
         sealedSolid.remove(immutable);
         sealedLights.remove(immutable);
         sealedFloorLights.remove(immutable);
+        LayerSeals ls = sealsByLayer.get(immutable.getY());
+        if (ls != null)
+        {
+            ls.air.remove(immutable);
+            ls.solid.remove(immutable);
+            ls.lights.remove(immutable);
+            ls.floorLights.remove(immutable);
+        }
     }
 
-    // 控制位验证线（2026-09-04 拍板，与光源线同款）：格上不是矿道层控制方块 → 重派 PLACE_CONTROL
+    // 控制位验证（随层检查）：该层格上不是矿道层控制方块 → 重派 PLACE_CONTROL
     // （常规状态不存在被挖；覆盖创造模式挖除与意外破坏）
-    private int checkControlSlice(ServerLevel level, int cursor)
+    private void checkControlSealsOfLayer(ServerLevel level, int y)
     {
-        if (sealedControls.isEmpty()) return 0;
-        if (cursor >= sealedControls.size()) cursor = 0;
-        int end = Math.min(sealedControls.size(), cursor + REFRESH_SLICE);
-        for (int i = cursor; i < end; i++)
+        for (ControlEntry entry : sealedControls)
         {
-            BlockPos pos = sealedControls.get(i).pos();
+            BlockPos pos = entry.pos();
+            if (pos.getY() != y) continue;
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
             if (state.getBlock() == MineCenterRegistration.MINE_LAYER_CONTROL_BLOCK.get()) continue;
-            LOGGER.info("[MineDebug] 10s检查违规 PLACE_CONTROL @ {} 实际={}", pos.toShortString(),
+            LOGGER.info("[MineDebug] 封存检查违规 PLACE_CONTROL @ {} 实际={}", pos.toShortString(),
                     state.isAir() ? "空气" : state.getBlock().getName().getString());
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.PLACE_CONTROL));
         }
-        return end >= sealedControls.size() ? 0 : end;
     }
 
     // 矿井中心移除时销毁所有绑定的矿道层控制方块（2026-09-04 拍板；在实例注销前由 deleteById 调用）
@@ -2104,17 +2178,12 @@ public class MineInstance extends ProjectCenterInstance
                 removed, sealedControls.size());
     }
 
-    // 检查一段封存列表并推进游标；satisfiedWhenEmpty=true → "为空"算违规（实体/灯位）；false → "非空"算违规（空置）
-    // 返回推进后的游标
-    private int checkSealedSlice(ServerLevel level, List<BlockPos> list, int cursor,
+    // 检查一层的封存集合；satisfiedWhenEmpty=true → "为空"算违规（实体/灯位）；false → "非空"算违规（空置）
+    private void checkLayerSeals(ServerLevel level, Set<BlockPos> set,
                                  MineTask.Type violationType, boolean satisfiedWhenEmpty)
     {
-        if (list.isEmpty()) return 0;
-        if (cursor >= list.size()) cursor = 0;
-        int end = Math.min(list.size(), cursor + REFRESH_SLICE);
-        for (int i = cursor; i < end; i++)
+        for (BlockPos pos : set)
         {
-            BlockPos pos = list.get(i);
             if (!level.isLoaded(pos)) continue;
             BlockState state = level.getBlockState(pos);
             MineTask.Type vType = violationType;
@@ -2147,13 +2216,12 @@ public class MineInstance extends ProjectCenterInstance
             if (violated)
             {
                 MineTask task = new MineTask(pos.immutable(), vType);
-                LOGGER.info("[MineDebug] 10s检查违规 {} @ {} 实际={}", vType,
+                LOGGER.info("[MineDebug] 封存检查违规 {} @ {} 实际={}", vType,
                         pos.toShortString(),
                         state.isAir() ? "空气" : state.getBlock().getName().getString());
                 addHardTask(task);
             }
         }
-        return end >= list.size() ? 0 : end;
     }
 
     // ===================== 挖尽状态（D2） =====================
