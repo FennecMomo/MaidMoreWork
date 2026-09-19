@@ -2,9 +2,9 @@ package com.fennecmomo.maidmorework.project.mine;
 
 import com.mojang.serialization.MapCodec;
 
-import com.fennecmomo.maidmorework.project.center.CenterWarehouseContainer;
 import com.fennecmomo.maidmorework.project.center.MineInstance;
 import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
+import com.fennecmomo.maidmorework.project.center.WarehouseMenu;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -13,7 +13,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -86,18 +85,9 @@ public class MineCenterBlock extends com.fennecmomo.maidmorework.project.center.
                     && ProjectCenterManager.get(serverLevel, be.getId()) instanceof MineInstance mine
                     && player instanceof ServerPlayer serverPlayer)
             {
-                CenterWarehouseContainer container = new CenterWarehouseContainer(mine);
-                container.compact();
-                int entries = container.entryCount();
                 serverPlayer.openMenu(new SimpleMenuProvider(
-                        (id, inv, p) -> ChestMenu.sixRows(id, inv, container),
+                        (id, inv, p) -> new WarehouseMenu(id, inv, mine),
                         Component.literal("矿井仓库")));
-                if (entries > CenterWarehouseContainer.SLOTS)
-                {
-                    serverPlayer.sendSystemMessage(Component.literal(
-                            "§e仓库条目 " + entries + " 超过 " + CenterWarehouseContainer.SLOTS
-                            + " 格，界面只显示前 " + CenterWarehouseContainer.SLOTS + " 格（其余保留）"));
-                }
                 return InteractionResult.CONSUME;
             }
         }

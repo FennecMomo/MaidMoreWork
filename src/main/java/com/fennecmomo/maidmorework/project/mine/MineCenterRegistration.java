@@ -28,6 +28,16 @@ public class MineCenterRegistration
     public static final DeferredRegister.Items ITEMS =
             DeferredRegister.createItems(MaidMoreWork.MODID);
 
+    // 菜单类型注册（2026-09-04：矿井仓库界面）
+    public static final DeferredRegister<net.minecraft.world.inventory.MenuType<?>> MENUS =
+            DeferredRegister.create(net.minecraft.core.registries.Registries.MENU, MaidMoreWork.MODID);
+
+    public static final DeferredHolder<net.minecraft.world.inventory.MenuType<?>,
+            net.minecraft.world.inventory.MenuType<com.fennecmomo.maidmorework.project.center.WarehouseMenu>> WAREHOUSE_MENU =
+            MENUS.register("warehouse",
+                    () -> net.neoforged.neoforge.common.extensions.IMenuTypeExtension
+                            .create(com.fennecmomo.maidmorework.project.center.WarehouseMenu::new));
+
     // 矿井中心方块（属性与工程中心方块一致：不可摧毁、无掉落、禁活塞）
     public static final DeferredHolder<Block, MineCenterBlock> MINE_CENTER_BLOCK =
             BLOCKS.registerBlock("mine_center",

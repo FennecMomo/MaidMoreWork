@@ -80,6 +80,7 @@ public class MaidMoreWork
         MineCenterRegistration.BLOCKS.register(modBus);
         MineCenterRegistration.BLOCK_ENTITIES.register(modBus);
         MineCenterRegistration.ITEMS.register(modBus);
+        MineCenterRegistration.MENUS.register(modBus);
         CREATIVE_TABS.register(modBus);
 
         ProjectTypeRegistry.discover();
