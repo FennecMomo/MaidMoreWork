@@ -139,14 +139,19 @@ public class MineInstance extends ProjectCenterInstance
 
     // 当前周期内 Y 层（高→低）与保留区/光源（懒计算）
     private final List<Integer> cycleLayerYs = new ArrayList<>();
+    private final List<Integer> nextCycleLayerYs = new ArrayList<>();      // 下一周期的层（跨周期窗口用）
+    private final Set<Integer> computedCycles = new HashSet<>();           // 已计算过层数据的周期
     private final Map<Integer, Set<BlockPos>> cycleKeeps = new HashMap<>();
     private final Map<Integer, Set<BlockPos>> cycleLights = new HashMap<>();
     private final Map<Integer, ControlMeta> cycleControls = new HashMap<>();   // 层 Y → 该层矿道控制方块位
 
     // 当前层运行时状态（不持久化，实时方块状态即进度真相）
-    private final Set<BlockPos> layerProcessed = new HashSet<>();
+    // 2026-09-04：改为按层各存一份（竖井同开三层，层之间不能互相污染）
+    private final Map<Integer, Set<BlockPos>> layerProcessed = new HashMap<>();   // 层Y → 已处理
+    private final Map<Integer, List<BlockPos>> layerHardList = new HashMap<>();    // 层Y → 层困难表
     private final Map<UUID, MineTask> layerSubtasks = new HashMap<>();
-    private final List<BlockPos> layerHardList = new ArrayList<>();
+    private final Map<Integer, Long> settleWaitUntil = new HashMap<>();            // 层Y → 2s 复核倒计时
+    private final Set<Integer> layerPaused = new HashSet<>();                      // 暂停中的层Y
 
     // ===================== 困难表 / 封存列表（D1 终版） =====================
 
@@ -194,12 +199,10 @@ public class MineInstance extends ProjectCenterInstance
 
     // 层结算复核等待（2 秒，2026-09-04 拍板：层清空后等掉落物落网再推进）
     private static final long SETTLE_WAIT_TICKS = 40;
-    private long settleWaitUntil = 0;
 
     // 层暂停（2026-09-04 拍板）：结算复核后不可处理方块超过该层总格数 10% → 暂停，
     // 等待补货后自动恢复（临时状态，重载后由结算流程重新推导）
     private static final float PAUSE_RATIO = 0.10f;
-    private boolean layerPaused = false;
 
     // 缺工具数据记录（UI 阶段展示用，当前先持久化字符串描述）
     private final List<String> missingToolNotes = new ArrayList<>();
@@ -312,11 +315,25 @@ public class MineInstance extends ProjectCenterInstance
                 : Math.max(0, planner().getW() - 3);
     }
 
-    // 计算当前周期的任务数据：保留区/光源，按 Y 层分组（懒计算，重载后重建）
-    // 结构沿用旧版 computeCycle：螺旋保留区 + 矿井方块保护 + 入口清理 + 支撑层 + 围墙 + 光源
-    private void ensureCycleComputed(ServerLevel level)
+    // 层数据懒计算驱动（2026-09-04 跨周期窗口）：当前周期 + 需要时预计算下一周期
+    // （竖井窗口=当前层+往下两层，跨周期无缝；周期只是内部计算概念，对玩家无感知）
+    private void ensureLayersComputed(ServerLevel level)
     {
-        if (!cycleLayerYs.isEmpty()) return;
+        if (cycleLayerYs.isEmpty())
+        {
+            computeCycle(cycle, level);
+        }
+        if (layerIndex + 2 >= cycleLayerYs.size() && nextCycleLayerYs.isEmpty())
+        {
+            computeCycle(cycle + 1, level);
+        }
+    }
+
+    // 计算指定周期的任务数据：保留区/光源，按 Y 层分组（懒计算，重载后重建）
+    // 结构沿用旧版 computeCycle：螺旋保留区 + 矿井方块保护 + 入口清理 + 支撑层 + 围墙 + 光源 + 栏杆
+    private void computeCycle(int c, ServerLevel level)
+    {
+        if (!computedCycles.add(c)) return;
 
         SpiralMinePlanner p = planner();
 
@@ -327,7 +344,7 @@ public class MineInstance extends ProjectCenterInstance
         int limit = edgeStepLimit(n);
         while (true)
         {
-            for (BlockPos k : p.getKeepBlocks(cycle, n, idx))
+            for (BlockPos k : p.getKeepBlocks(c, n, idx))
             {
                 keepsByY.computeIfAbsent(k.getY(), key -> new HashSet<>()).add(k.immutable());
             }
@@ -345,7 +362,7 @@ public class MineInstance extends ProjectCenterInstance
         // 入口清理、矿井方块保护、初始支撑只属于 C0。
         // 之前每个周期都重复添加这些层，导致 C1 重新回到 mineY+1/mineY+2 顶部，
         // 把入口/首层平台再次当作待挖区域。
-        if (cycle == 0)
+        if (c == 0)
         {
             // 矿井方块自身加入保留区，防止被挖
             keepsByY.computeIfAbsent(mineY, key -> new HashSet<>()).add(getBlockPos());
@@ -395,30 +412,33 @@ public class MineInstance extends ProjectCenterInstance
 
         // 走道内侧栏杆（2026-09-04 拍板）：每层保留格朝中心扩 1 格成栏杆位（地板延展）+ 往上 2 格实心；
         // 转角 2×2 平台不加（会挡转弯）；首层（矿井方块正下方那层 = 周期 0 第一层）例外
-        addRailings(keepsByY, cycle, cycle == 0 ? mineY - 1 : Integer.MIN_VALUE);
-        // 历史周期补栏杆（幂等）：已挖过的层靠 10s 实体封存检查把栏杆补砌起来
-        for (int c = 0; c < cycle; c++)
+        addRailings(keepsByY, c, c == 0 ? mineY - 1 : Integer.MIN_VALUE);
+        // 历史周期补栏杆（幂等，仅当前周期计算时跑一次）：已挖过的层靠 10s 实体封存检查把栏杆补砌起来
+        if (c == cycle)
         {
-            Map<Integer, Set<BlockPos>> past = new HashMap<>();
-            int pn = 0;
-            int pidx = 0;
-            int plimit = edgeStepLimit(pn);
-            while (true)
+            for (int pc = 0; pc < cycle; pc++)
             {
-                for (BlockPos k : p.getKeepBlocks(c, pn, pidx))
+                Map<Integer, Set<BlockPos>> past = new HashMap<>();
+                int pn = 0;
+                int pidx = 0;
+                int plimit = edgeStepLimit(pn);
+                while (true)
                 {
-                    past.computeIfAbsent(k.getY(), key -> new HashSet<>()).add(k.immutable());
+                    for (BlockPos k : p.getKeepBlocks(pc, pn, pidx))
+                    {
+                        past.computeIfAbsent(k.getY(), key -> new HashSet<>()).add(k.immutable());
+                    }
+                    pidx++;
+                    if (pidx > plimit)
+                    {
+                        pn++;
+                        if (pn > 3) break;
+                        pidx = 0;
+                        plimit = edgeStepLimit(pn);
+                    }
                 }
-                pidx++;
-                if (pidx > plimit)
-                {
-                    pn++;
-                    if (pn > 3) break;
-                    pidx = 0;
-                    plimit = edgeStepLimit(pn);
-                }
+                addRailings(past, pc, Integer.MIN_VALUE);
             }
-            addRailings(past, c, Integer.MIN_VALUE);
         }
 
         // 光源（2026-09-04 拍板，同日修正）：只在每条边中段的 3×2 平台处放，每平台 1 盏（灯2）：
@@ -430,7 +450,7 @@ public class MineInstance extends ProjectCenterInstance
         for (int edge = 0; edge <= 3; edge++)
         {
             int half = (edge % 2 == 0) ? (p.getL() - 1) / 2 : (p.getW() - 1) / 2;
-            List<BlockPos> platformKeeps = p.getKeepBlocks(cycle, edge, half);
+            List<BlockPos> platformKeeps = p.getKeepBlocks(c, edge, half);
             if (platformKeeps.isEmpty()) continue;
             int h = platformKeeps.get(0).getY();
             Set<BlockPos> lights = cycleLights.computeIfAbsent(h, key -> new HashSet<>());
@@ -476,11 +496,29 @@ public class MineInstance extends ProjectCenterInstance
         }
 
         cycleKeeps.putAll(keepsByY);
-        cycleLayerYs.addAll(keepsByY.keySet());
-        cycleLayerYs.sort(Comparator.reverseOrder());
+        if (c == cycle)
+        {
+            cycleLayerYs.addAll(keepsByY.keySet());
+            cycleLayerYs.sort(Comparator.reverseOrder());
+            // 重载恢复等场景的越界保护
+            if (layerIndex >= cycleLayerYs.size()) layerIndex = 0;
+        }
+        else
+        {
+            nextCycleLayerYs.addAll(keepsByY.keySet());
+            nextCycleLayerYs.sort(Comparator.reverseOrder());
+        }
+    }
 
-        // 重载恢复等场景的越界保护
-        if (layerIndex >= cycleLayerYs.size()) layerIndex = 0;
+    // 竖井窗口（2026-09-04 拍板）：当前层 + 往下两层，跨周期无缝；i=0 为当前层
+    // 返回 [cycle, layerY]，越界返回 null
+    private int[] windowLayer(int i)
+    {
+        int idx = layerIndex + i;
+        if (idx < cycleLayerYs.size()) return new int[]{cycle, cycleLayerYs.get(idx)};
+        int rem = idx - cycleLayerYs.size();
+        if (rem < nextCycleLayerYs.size()) return new int[]{cycle + 1, nextCycleLayerYs.get(rem)};
+        return null;
     }
 
     // 走道内侧栏杆（2026-09-04 拍板）：每层保留格朝中心扩 1 格成栏杆位（地板延展），
@@ -565,7 +603,7 @@ public class MineInstance extends ProjectCenterInstance
     // 工程解析：恢复手头工程；否则在"可加入/可新建"的候选里随机挑一个
     // 候选 = 当前层竖井工程（不存在则可新建，y 非法时关闭） + 现有未完成矿道工程（有空位）
     //        + 未挖完且无在飞工程的矿道（可新建）
-    private ProjectBase resolveProject(ServerLevel level, EntityMaid maid, int y)
+    private ProjectBase resolveProject(ServerLevel level, EntityMaid maid)
     {
         UUID maidUuid = maid.getUUID();
 
@@ -581,7 +619,8 @@ public class MineInstance extends ProjectCenterInstance
             unassignProject(maidUuid);
         }
 
-        // 2. 收集候选
+        // 2. 收集候选：竖井（窗口内三层各一个"加入/新建"选项）+ 矿道（可加入/可新建）
+        List<int[]> shaftOptions = new ArrayList<>();       // [cycle, layerY]
         List<ProjectBase> joinable = new ArrayList<>();
         Set<BlockPos> tunnelHaveProject = new HashSet<>();
         for (ProjectBase p : getManagedProjects())
@@ -589,13 +628,9 @@ public class MineInstance extends ProjectCenterInstance
             if (p.isCompleted()) continue;
             if (p instanceof MineShaftProject shaft)
             {
-                if (shaft.getCycle() == cycle && shaft.getLayerY() == y)
+                if (!inShaftWindow(shaft.getCycle(), shaft.getLayerY()))
                 {
-                    joinable.add(shaft);
-                }
-                else
-                {
-                    shaft.markCompleted();      // 落后层残留工程：标记完成，等基类移除
+                    shaft.markCompleted();      // 窗口外残留工程：标记完成，等基类移除
                 }
                 continue;
             }
@@ -605,6 +640,14 @@ public class MineInstance extends ProjectCenterInstance
                 if (tunnel.hasAvailableSlot()) joinable.add(tunnel);
             }
         }
+        if (!exhausted)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                int[] w = windowLayer(i);
+                if (w != null) shaftOptions.add(w);
+            }
+        }
         List<ControlEntry> creatableTunnels = new ArrayList<>();
         for (ControlEntry e : sealedControls)
         {
@@ -612,16 +655,16 @@ public class MineInstance extends ProjectCenterInstance
             if (tunnelHaveProject.contains(e.pos())) continue;
             creatableTunnels.add(e);
         }
-        boolean shaftOption = !exhausted && layerIndex < cycleLayerYs.size() && y >= depthBottomY();
-        int optionCount = (shaftOption ? 1 : 0) + joinable.size() + creatableTunnels.size();
+        int optionCount = shaftOptions.size() + joinable.size() + creatableTunnels.size();
         if (optionCount == 0) return null;
         int r = level.getRandom().nextInt(optionCount);
 
-        if (shaftOption)
+        if (r < shaftOptions.size())
         {
-            if (r == 0) return joinOrCreateShaft(level, maid, y);
-            r--;
+            int[] w = shaftOptions.get(r);
+            return joinOrCreateShaft(level, maid, w[0], w[1]);
         }
+        r -= shaftOptions.size();
         if (r < joinable.size())
         {
             ProjectBase p = joinable.get(r);
@@ -636,14 +679,25 @@ public class MineInstance extends ProjectCenterInstance
         return createTunnelProject(level, maid, creatableTunnels.get(r));
     }
 
-    // 加入或新建当前层竖井工程（容量不限）
-    private MineShaftProject joinOrCreateShaft(ServerLevel level, EntityMaid maid, int y)
+    // 该（周期,层）是否在竖井开放窗口内（当前层 + 往下两层，跨周期）
+    private boolean inShaftWindow(int c, int layerY)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            int[] w = windowLayer(i);
+            if (w != null && w[0] == c && w[1] == layerY) return true;
+        }
+        return false;
+    }
+
+    // 加入或新建指定（周期,层）的竖井工程（容量不限）
+    private MineShaftProject joinOrCreateShaft(ServerLevel level, EntityMaid maid, int c, int y)
     {
         UUID maidUuid = maid.getUUID();
         for (ProjectBase p : getManagedProjects())
         {
             if (p instanceof MineShaftProject shaft && !shaft.isCompleted()
-                    && shaft.getCycle() == cycle && shaft.getLayerY() == y)
+                    && shaft.getCycle() == c && shaft.getLayerY() == y)
             {
                 if (shaft.claim(maidUuid))
                 {
@@ -654,13 +708,12 @@ public class MineInstance extends ProjectCenterInstance
             }
         }
         MineShaftProject created = new MineShaftProject(
-                new BlockPos(getBlockPos().getX(), y, getBlockPos().getZ()), cycle, y);
+                new BlockPos(getBlockPos().getX(), y, getBlockPos().getZ()), c, y);
         created.setDimension(level.dimension());
         if (!created.claim(maidUuid)) return null;
         claimTargets(List.of(), created);
         assignProject(maidUuid, created.getId());
-        LOGGER.info("[MineDebug] 新建竖井层工程 周期C{} 层#{} Y={} 女仆={}",
-                cycle, layerIndex, y, shortId(maidUuid));
+        LOGGER.info("[MineDebug] 新建竖井层工程 周期C{} Y={} 女仆={}", c, y, shortId(maidUuid));
         return created;
     }
 
@@ -1001,7 +1054,7 @@ public class MineInstance extends ProjectCenterInstance
                         maintenance.type(), maintenance.pos().toShortString());
                 return maintenance;
             }
-            ProjectBase tunnelProject = resolveProject(level, maid, Integer.MIN_VALUE);
+            ProjectBase tunnelProject = resolveProject(level, maid);
             if (tunnelProject instanceof MineTunnelProject tunnel)
             {
                 return nextTunnelTask(level, maid, tunnel);
@@ -1009,10 +1062,10 @@ public class MineInstance extends ProjectCenterInstance
             return null;
         }
 
-        ensureCycleComputed(level);
+        ensureLayersComputed(level);
         if (layerIndex >= cycleLayerYs.size()) return null;
-        int y = cycleLayerYs.get(layerIndex);
-        if (y < depthBottomY())
+        int currentY = cycleLayerYs.get(layerIndex);
+        if (currentY < depthBottomY())
         {
             markExhausted();
             return null;
@@ -1032,13 +1085,15 @@ public class MineInstance extends ProjectCenterInstance
             return hard;
         }
 
-        // 0.5 工程解析（2026-09-04 拍板：竖井层/矿道都是工程，完工后随机再分配）
-        ProjectBase project = resolveProject(level, maid, y);
+        // 0.5 工程解析（2026-09-04 拍板：竖井层/矿道都是工程，完工后随机再分配；竖井窗口=三层）
+        ProjectBase project = resolveProject(level, maid);
         if (project == null) return null;
         if (project instanceof MineTunnelProject tunnel)
         {
             return nextTunnelTask(level, maid, tunnel);
         }
+        MineShaftProject shaft = (MineShaftProject) project;
+        int y = shaft.getLayerY();
 
         Set<BlockPos> keeps = cycleKeeps.getOrDefault(y, Set.of());
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
@@ -1053,16 +1108,16 @@ public class MineInstance extends ProjectCenterInstance
             for (int z = p.getMinZ() - 1; z <= p.getMaxZ() + 1; z++)
             {
                 BlockPos pos = new BlockPos(x, y, z);
-                if (layerProcessed.contains(pos) || lights.contains(pos) || isClaimed(pos)) continue;
+                if (processedOf(y).contains(pos) || lights.contains(pos) || isClaimed(pos)) continue;
                 // 层困难表内坐标不重复派发（2026-09-04 拍板：先检查再分配，表内由复核机制统一重判）
-                if (layerHardList.contains(pos)) continue;
+                if (hardListOf(y).contains(pos)) continue;
 
                 BlockState state = level.getBlockState(pos);
                 // 灯位保护（2026-09-04 拍板）：发光且非流体的方块一格永不进挖掘池
                 // （防任意层级的误挖，含支撑方块被挖导致灯掉落的场景）
                 if (state.getLightEmission() > 0 && state.getFluidState().isEmpty())
                 {
-                    layerProcessed.add(pos);
+                    processedOf(y).add(pos);
                     continue;
                 }
                 MineTask.Type type;
@@ -1082,7 +1137,7 @@ public class MineInstance extends ProjectCenterInstance
                     }
                     else
                     {
-                        layerProcessed.add(pos);
+                        processedOf(y).add(pos);
                         continue;
                     }
                 }
@@ -1095,7 +1150,7 @@ public class MineInstance extends ProjectCenterInstance
                     else if (isScaffoldState(state) || !state.is(Tags.Blocks.ORES))
                     {
                         // 垫脚完好 → 丢已处理；非矿物实体（砂岩/石头等）→ 无需替换（2026-09-04 拍板）
-                        layerProcessed.add(pos);
+                        processedOf(y).add(pos);
                         continue;
                     }
                     else
@@ -1108,7 +1163,7 @@ public class MineInstance extends ProjectCenterInstance
                 {
                     if (state.isAir())
                     {
-                        layerProcessed.add(pos);                         // 无方块 → 丢已处理
+                        processedOf(y).add(pos);                         // 无方块 → 丢已处理
                         continue;
                     }
                     type = isProcessableBy(level, pos, state, maid) ? MineTask.Type.DESTROY : null;
@@ -1117,9 +1172,9 @@ public class MineInstance extends ProjectCenterInstance
                 if (type == null)
                 {
                     // 可行性不足（§8 派发侧五级检查全不成立）→ 层困难表 + 缺工具记录，不分配
-                    if (!layerHardList.contains(pos))
+                    if (!hardListOf(y).contains(pos))
                     {
-                        layerHardList.add(pos.immutable());
+                        hardListOf(y).add(pos.immutable());
                     }
                     recordMissingTool(state);
                     continue;
@@ -1161,44 +1216,51 @@ public class MineInstance extends ProjectCenterInstance
             return controlTask;
         }
 
-        // 3. 层完成结算：他人在干 → 让位等待（§3）；无人干活 → 等 2 秒复核（D1 终版：
-        //    掉落物落网期间派发扫描实时重判，2 秒后池子仍空才推进下一层）
-        //    2026-09-04 修正：只算本层（竖井）任务，矿道工程的在飞任务不算"他人在干"
-        for (MineTask boundTask : layerSubtasks.values())
+        // 3. 层完成结算（2026-09-04 拍板：结算推进只发生在当前层；预挖层工作做完即工程完工、女仆转场）
+        if (y != currentY)
         {
-            if (isLayerTask(boundTask, y)) return null;
-        }
-        long now = level.getGameTime();
-        if (settleWaitUntil == 0)
-        {
-            settleWaitUntil = now + SETTLE_WAIT_TICKS;
-            LOGGER.info("[MineDebug] 层池清空，2s复核等待 周期C{} 层#{} Y={}",
-                    cycle, layerIndex, y);
+            shaft.markCompleted();
+            LOGGER.info("[MineDebug] 竖井预挖层工作完成 周期C{} Y={}（等轮到当前层再走结算）", cycle, y);
             return null;
         }
-        if (now < settleWaitUntil) return null;
-        settleWaitUntil = 0;
+        // 当前层：他人在干 → 让位等待（§3）；无人干活 → 等 2 秒复核（D1 终版：
+        // 掉落物落网期间派发扫描实时重判，2 秒后池子仍空才推进下一层）
+        // 2026-09-04 修正：只算本层（竖井）任务，矿道工程的在飞任务不算"他人在干"
+        for (MineTask boundTask : layerSubtasks.values())
+        {
+            if (isLayerTask(boundTask, currentY)) return null;
+        }
+        long now = level.getGameTime();
+        Long waitUntil = settleWaitUntil.get(currentY);
+        if (waitUntil == null || waitUntil == 0)
+        {
+            settleWaitUntil.put(currentY, now + SETTLE_WAIT_TICKS);
+            LOGGER.info("[MineDebug] 层池清空，2s复核等待 周期C{} 层#{} Y={}",
+                    cycle, layerIndex, currentY);
+            return null;
+        }
+        if (now < waitUntil) return null;
+        settleWaitUntil.remove(currentY);
         // 2s 复核后：层困难表逐条重判（可行域=仓库+在场女仆）——可处理的回池，本轮继续派发
-        if (rejudgeLayerHardList(level)) return null;
+        if (rejudgeLayerHardList(level, currentY)) return null;
         // 10% 终判：不可处理超过该层总格数 10% → 层暂停（等补货，10s 周期自动重判恢复）
         int total = layerTotalCells();
-        if (layerHardList.size() > total * PAUSE_RATIO)
+        if (hardListOf(currentY).size() > total * PAUSE_RATIO)
         {
-            if (!layerPaused)
+            if (layerPaused.add(currentY))
             {
-                layerPaused = true;
                 LOGGER.info("[MineDebug] 层暂停：不可处理 {}/{} 超过10% 周期C{} 层#{} 缺工具:{}",
-                        layerHardList.size(), total, cycle, layerIndex, missingToolNotes);
+                        hardListOf(currentY).size(), total, cycle, layerIndex, missingToolNotes);
             }
             return null;
         }
-        layerPaused = false;
+        layerPaused.remove(currentY);
         // 剩余上缴带类型困难表，推进下一层
-        for (BlockPos pos : layerHardList)
+        for (BlockPos pos : hardListOf(currentY))
         {
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
         }
-        layerHardList.clear();
+        hardListOf(currentY).clear();
         LOGGER.info("[MineDebug] 层结算推进 周期C{} 层#{} → 周期C{} 层#{}",
                 cycle, layerIndex, cycleLayerYs.size() > layerIndex + 1 ? cycle : cycle + 1,
                 layerIndex + 1 >= cycleLayerYs.size() ? 0 : layerIndex + 1);
@@ -1212,14 +1274,15 @@ public class MineInstance extends ProjectCenterInstance
     {
         layerSubtasks.remove(maid.getUUID());
         // 层结算倒计时只由本层（竖井）任务完成重置；矿道任务完成不重置（2026-09-04 修正：
-        // 矿道火把反复完成会不断重置 2s 复核，导致竖井层永远结算不了）
-        if (layerIndex < cycleLayerYs.size() && isLayerTask(task, cycleLayerYs.get(layerIndex)))
+        // 矿道火把反复完成会不断重置 2s 复核，导致竖井层永远结算不了；2026-09-04 三层化：按层各存）
+        if (layerIndex < cycleLayerYs.size())
         {
-            settleWaitUntil = 0;
+            int curY = cycleLayerYs.get(layerIndex);
+            if (isLayerTask(task, curY)) settleWaitUntil.remove(curY);
         }
         if (task.type() == MineTask.Type.FETCH_LIGHT) return;   // 取灯非坐标任务
         // 完成的坐标记入本层已处理（防止"临时塞子"等完成后被本层扫描立即重复派发）
-        layerProcessed.add(task.pos());
+        processedOf(task.pos().getY()).add(task.pos());
         switch (task.type())
         {
             case DESTROY -> sealAs(task.pos(), sealedAir);
@@ -1309,6 +1372,17 @@ public class MineInstance extends ProjectCenterInstance
         return false;
     }
 
+    // 按层取的运行时集合（2026-09-04：竖井同开三层，层状态各存一份）
+    private Set<BlockPos> processedOf(int y)
+    {
+        return layerProcessed.computeIfAbsent(y, k -> new HashSet<>());
+    }
+
+    private List<BlockPos> hardListOf(int y)
+    {
+        return layerHardList.computeIfAbsent(y, k -> new ArrayList<>());
+    }
+
     // 该任务是否属于指定层的竖井工作（挖格/火把/控制方块）：
     // 用于层结算"他人在干"判定与层解绑范围——矿道任务（层高 h+1/h+2 或范围外）不干扰竖井层结算
     private boolean isLayerTask(MineTask task, int y)
@@ -1394,10 +1468,10 @@ public class MineInstance extends ProjectCenterInstance
         double bestDist = Double.MAX_VALUE;
         for (BlockPos pos : lights)
         {
-            if (layerProcessed.contains(pos) || isClaimed(pos)) continue;
+            if (processedOf(y).contains(pos) || isClaimed(pos)) continue;
             if (level.getBlockState(pos).getLightEmission() > 0)
             {
-                layerProcessed.add(pos);                             // 已有光源 → 视为已放
+                processedOf(y).add(pos);                             // 已有光源 → 视为已放
                 continue;
             }
             double dist = pos.distSqr(maid.blockPosition());
@@ -1603,15 +1677,16 @@ public class MineInstance extends ProjectCenterInstance
         int finishedY = cycleLayerYs.get(layerIndex);
         // 竖井层工程完工标记（2026-09-04 拍板：层=工程，完工后基类清分配，女仆随机再分配）
         markShaftProjectComplete(cycle, finishedY);
-        for (BlockPos pos : layerHardList)
+        for (BlockPos pos : hardListOf(finishedY))
         {
             addHardTask(new MineTask(pos.immutable(), MineTask.Type.DESTROY));
         }
-        layerHardList.clear();
+        layerHardList.remove(finishedY);
+        layerPaused.remove(finishedY);
         // 只解绑本层任务；矿道工程的在飞任务保持绑定（2026-09-04 修正）
         layerSubtasks.entrySet().removeIf(e -> isLayerTask(e.getValue(), finishedY));
-        layerProcessed.clear();
-        settleWaitUntil = 0;
+        layerProcessed.remove(finishedY);
+        settleWaitUntil.remove(finishedY);
 
         layerIndex++;
         if (layerIndex >= cycleLayerYs.size())
@@ -1619,10 +1694,12 @@ public class MineInstance extends ProjectCenterInstance
             cycle++;
             layerIndex = 0;
             cycleLayerYs.clear();
+            nextCycleLayerYs.clear();
+            computedCycles.clear();
             cycleKeeps.clear();
             cycleLights.clear();
             cycleControls.clear();
-            ensureCycleComputed(level);
+            ensureLayersComputed(level);
         }
     }
 
@@ -1673,7 +1750,7 @@ public class MineInstance extends ProjectCenterInstance
         if (now - lastRefreshGameTime < REFRESH_INTERVAL_TICKS) return;
         lastRefreshGameTime = now;
         refreshSealedLists(level);
-        if (layerPaused) tryResumeLayer(level);
+        if (!layerPaused.isEmpty()) tryResumePausedLayers(level);
     }
 
     // 行为侧每 tick 上报"当前要去的地方"（#23 修正 2026-09-04）：null = 原地待命/等待，
@@ -1873,32 +1950,35 @@ public class MineInstance extends ProjectCenterInstance
         return base.above();
     }
 
-    // 暂停层 10s 重判：可处理比例回落到阈值内 → 自动恢复（工具来源=仓库+在场女仆）
-    private void tryResumeLayer(ServerLevel level)
+    // 暂停层 10s 重判（2026-09-04 三层化：逐个暂停层处理）：可处理比例回落到阈值内 → 自动恢复
+    private void tryResumePausedLayers(ServerLevel level)
     {
-        rejudgeLayerHardList(level);
-        int total = layerTotalCells();
-        if (layerHardList.size() <= total * PAUSE_RATIO)
+        for (int y : new ArrayList<>(layerPaused))
         {
-            layerPaused = false;
-            missingToolNotes.clear();
-            LOGGER.info("[MineDebug] 层暂停解除 周期C{} 层#{} 困难表残留{}",
-                    cycle, layerIndex, layerHardList.size());
+            rejudgeLayerHardList(level, y);
+            int total = layerTotalCells();
+            if (hardListOf(y).size() <= total * PAUSE_RATIO)
+            {
+                layerPaused.remove(y);
+                LOGGER.info("[MineDebug] 层暂停解除 周期C{} Y={} 困难表残留{}",
+                        cycle, y, hardListOf(y).size());
+            }
         }
     }
 
     // 层困难表重判（可行域=仓库+在场女仆随身工具）：可处理的移出层困难表回池派发
     // 返回 true = 本轮有条目恢复可处理
-    private boolean rejudgeLayerHardList(ServerLevel level)
+    private boolean rejudgeLayerHardList(ServerLevel level, int y)
     {
-        if (layerHardList.isEmpty()) return false;
+        List<BlockPos> hard = hardListOf(y);
+        if (hard.isEmpty()) return false;
         List<EntityMaid> maids = new ArrayList<>();
         for (UUID uuid : getMemberIds())
         {
             if (level.getEntity(uuid) instanceof EntityMaid m) maids.add(m);
         }
         List<BlockPos> recovered = new ArrayList<>();
-        for (BlockPos pos : layerHardList)
+        for (BlockPos pos : hard)
         {
             if (!level.isLoaded(pos)) continue;
             if (isProcessableByContext(level, pos, level.getBlockState(pos), maids))
@@ -1906,7 +1986,7 @@ public class MineInstance extends ProjectCenterInstance
                 recovered.add(pos);
             }
         }
-        layerHardList.removeAll(recovered);
+        hard.removeAll(recovered);
         if (!recovered.isEmpty())
         {
             LOGGER.info("[MineDebug] 层困难表复核：{} 个坐标恢复可处理", recovered.size());
@@ -2074,7 +2154,7 @@ public class MineInstance extends ProjectCenterInstance
 
     public boolean isLayerPaused()
     {
-        return layerPaused;
+        return layerIndex < cycleLayerYs.size() && layerPaused.contains(cycleLayerYs.get(layerIndex));
     }
 
     // 挖尽后释放所有在线成员，但不删除矿井实例/方块（D2：实例与仓库保留）
@@ -2142,7 +2222,7 @@ public class MineInstance extends ProjectCenterInstance
     // 当前周期/层状态快照（调试命令用，触发周期数据懒计算）
     public String debugLayerInfo(ServerLevel level)
     {
-        ensureCycleComputed(level);
+        ensureLayersComputed(level);
         if (exhausted)
         {
             return String.format("已挖尽 | 周期C%d 层#%d", cycle, layerIndex);
@@ -2156,8 +2236,8 @@ public class MineInstance extends ProjectCenterInstance
         Set<BlockPos> lights = cycleLights.getOrDefault(y, Set.of());
         return String.format("周期C%d 层#%d/%d Y=%d(限%d) 保留%d 光源%d 子任务%d 层困难%d %s| 困难表%d 空置封存%d 实体封存%d",
                 cycle, layerIndex, cycleLayerYs.size(), y, depthBottomY(),
-                keeps.size(), lights.size(), layerSubtasks.size(), layerHardList.size(),
-                layerPaused ? "[层暂停] " : "",
+                keeps.size(), lights.size(), layerSubtasks.size(), hardListOf(y).size(),
+                isLayerPaused() ? "[层暂停] " : "",
                 mineHardTasks.size(), sealedAir.size(), sealedSolid.size());
     }
 }
