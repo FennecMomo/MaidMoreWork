@@ -191,6 +191,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         // 水中抖动诊断（2026-09-04 临时接入：定位抖动源后移除）
         logWaterDiagnostic(level, maid);
 
+        // 目的地上报（#23 修正 2026-09-04）：无目的地（原地待命/等待）不参与矿井侧卡死判定
+        mine.reportTravelGoal(maid.getUUID(), computeTravelGoal(level, maid, mine));
+
         // 卡死熔断（2026-09-04 拍板：采样由矿井侧承担——每 5 秒一次，只有矿井方块状态绝对稳定）：
         // 矿井判定"10 秒无位移且未施工"后下发一次性通知，此处传送并重置导航状态，从中心重新寻路
         if (mine.consumeStuckRecovery(maid.getUUID()))
@@ -1033,6 +1036,27 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         LOGGER.info("[MineDebug] 控制器传送 女仆={} → 控制器 {} 平台", shortId(maid), hub.toShortString());
     }
 
+    // 当前目的地（供矿井侧卡死判定，#23 修正 2026-09-04）：
+    //   存取支线 → 矿井方块；赶路去任务 → 任务坐标；等待中走向中心 → 矿井方块；
+    //   原地待命 / 施工中 / 等待已就位 → null（不判卡死，永不误传送）
+    private BlockPos computeTravelGoal(ServerLevel level, EntityMaid maid, MineInstance mine)
+    {
+        if (fetchKind != FetchKind.NONE || pendingDeposit)
+        {
+            return mine.getBlockPos();
+        }
+        if (currentTask != null && !reachedTarget)
+        {
+            return currentTask.pos();
+        }
+        if (currentTask == null && (mine.isLayerPaused() || mine.isExhausted())
+                && !isNear(maid, mine.getBlockPos()))
+        {
+            return mine.getBlockPos();
+        }
+        return null;
+    }
+
     // 去矿井方块（存矿/取货/暂停等待/挖尽等待的统一入口，2026-09-04 拍板）：
     //   无控制方块 或 女仆 Y 高于最高控制方块 → 正常走路；
     //   否则先走到离她最近的控制方块旁，再传送到矿井方块旁
@@ -1498,6 +1522,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         MineInstance mine = mineById(level);
         if (mine != null)
         {
+            mine.reportTravelGoal(maid.getUUID(), null);
             if (currentTask != null)
             {
                 BlockPos pos = currentTask.pos();

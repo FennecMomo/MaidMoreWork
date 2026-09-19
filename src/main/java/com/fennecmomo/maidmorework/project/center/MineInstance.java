@@ -186,6 +186,7 @@ public class MineInstance extends ProjectCenterInstance
     private final Map<UUID, BlockPos> stuckGoal = new HashMap<>();     // 当前目标（绑定子任务，无则中心）
     private final Map<UUID, Double> stuckBestDist = new HashMap<>();   // 距目标历史最近距离平方
     private final Map<UUID, BlockPos> stuckLastPos = new HashMap<>();  // 上次采样位置（陆地有位移算进展）
+    private final Map<UUID, BlockPos> travelGoals = new HashMap<>();   // 女仆上报的目的地（无=原地待命，不判卡死）
     private final Map<UUID, Integer> stuckTicks = new HashMap<>();
     private final Set<UUID> stuckRecovery = new HashSet<>();
     private final Map<UUID, Integer> absentSamples = new HashMap<>();  // 绑定女仆失联采样计数（活跃任务熔断兜底）
@@ -1576,6 +1577,20 @@ public class MineInstance extends ProjectCenterInstance
         if (layerPaused) tryResumeLayer(level);
     }
 
+    // 行为侧每 tick 上报"当前要去的地方"（#23 修正 2026-09-04）：null = 原地待命/等待，
+    // 不参与卡死判定（等待中的女仆不再被误传送）；有目的地才按接近/位移口径计卡死
+    public void reportTravelGoal(UUID maidUuid, BlockPos goal)
+    {
+        if (goal == null)
+        {
+            travelGoals.remove(maidUuid);
+        }
+        else
+        {
+            travelGoals.put(maidUuid, goal.immutable());
+        }
+    }
+
     // 卡死采样（5 秒一次，2026-09-04 修正：位移判定会被水中漂移/浮动反复清零 → 改为"距目标无进展"判定）：
     //   目标 = 绑定子任务坐标，无绑定则矿井方块；
     //   离目标 ≤4 格（在施工）或离中心 ≤4 格（存取/待机）→ 正常清零；
@@ -1590,8 +1605,12 @@ public class MineInstance extends ProjectCenterInstance
                 continue;
             }
             BlockPos pos = maid.blockPosition();
-            MineTask bound = layerSubtasks.get(uuid);
-            BlockPos goal = bound != null ? bound.pos() : getBlockPos();
+            BlockPos goal = travelGoals.get(uuid);       // 行为侧上报的目的地（#23：无目的地不判卡死）
+            if (goal == null)
+            {
+                clearStuckSample(uuid);
+                continue;
+            }
             double d = pos.distSqr(goal);
             BlockPos prevGoal = stuckGoal.put(uuid, goal);
             // 陆地位移也算有进展（2026-09-04 修正：长距离绕路/爬螺旋时"接近目标"不单调，
