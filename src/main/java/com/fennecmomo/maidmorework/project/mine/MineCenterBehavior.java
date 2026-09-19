@@ -305,8 +305,9 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
             return;
         }
 
-        // 导航
-        if (!reachedTarget)
+        // 导航（水源/流体位不限距离，2026-09-04 拍板）：水流太大时女仆可能永远靠不近目标，
+        // 直接远程执行清水+放塞子，避免"过不去→放不了方块→水清不掉"的死循环
+        if (!reachedTarget && level.getBlockState(target).getFluidState().isEmpty())
         {
             // 目标是矿井方块（如 FETCH_LIGHT）→ 走"回中心"入口（含控制器传送，2026-09-04 修正：
             // 之前走普通寻路要爬整条螺旋，路上被 10 秒熔断误判传送，来回弹）
