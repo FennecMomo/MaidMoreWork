@@ -347,8 +347,20 @@ public class ProjectCenterInstance
     {
         UUID uuid = maid.getUUID();
         savedHomes.putIfAbsent(uuid, maid.hasHome() ? maid.getHomePosition() : null);
-        maid.setHomeTo(getBlockPos(), radius);
+        maid.setHomeTo(homeAnchor(), homeRadius());
         maid.getBrain().setMemory(ModMemories.PROJECT_CENTER_UUID.get(), getId());
+    }
+
+    // 女仆 Home 锚点/半径（子类可覆写：矿井把家设到范围盒中心、半径覆盖整盒，
+    // 防止深层作业的女仆超出 Home 范围被 TLM 反复拉回）
+    protected BlockPos homeAnchor()
+    {
+        return getBlockPos();
+    }
+
+    protected int homeRadius()
+    {
+        return radius;
     }
 
     public void leaveCenter(EntityMaid maid)

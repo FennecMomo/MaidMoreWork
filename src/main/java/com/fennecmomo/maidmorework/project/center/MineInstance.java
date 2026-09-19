@@ -1031,13 +1031,25 @@ public class MineInstance extends ProjectCenterInstance
         // 4) 挖格全清 + 火把全亮 → 完工
         tunnel.markCompleted();
         tunnelDone.add(tunnel.getPosition());
-        // 隧道空气格封存（2026-09-04 拍板）：把"本来就空气"的格子也封上，掉东西/回填能被检查发现
+        // 隧道空气格封存（2026-09-04 拍板）：把"本来就空气"的格子也封上，掉东西/回填能被检查发现；
+        // 修正：已有封存类别的格子一律跳过（此前把火把位也改成"应空"，导致完工后火把被全挖）
         ensureSealIndex();
         for (BlockPos pos : plan.dig())
         {
             LayerSeals ls = sealsByLayer.get(pos.getY());
-            if (ls != null && ls.air.contains(pos)) continue;
+            if (ls != null && (ls.air.contains(pos) || ls.solid.contains(pos)
+                    || ls.lights.contains(pos) || ls.floorLights.contains(pos)))
+            {
+                continue;
+            }
             sealAs(pos, sealedAir);
+        }
+        // 火把位显式封回"地面灯位"（修历史脏数据：缺灯会被检查补放）
+        for (BlockPos pos : plan.torches())
+        {
+            LayerSeals ls = sealsByLayer.get(pos.getY());
+            if (ls != null && ls.floorLights.contains(pos)) continue;
+            sealAs(pos, sealedFloorLights);
         }
         LOGGER.info("[MineDebug] 矿道完工 周期C{} Y={} 边={} 控制方块={}",
                 tunnel.getCycle(), tunnel.getLayerY(), tunnel.getEdge(),
@@ -1573,14 +1585,32 @@ public class MineInstance extends ProjectCenterInstance
         return best;
     }
 
-    // 范围调整后清矿道完工缓存（2026-09-04 拍板）：已完工矿道按新范围重新清查，
-    // 多出来的格子重新变回可接工作；新格子的地板封存随工程重建
+    // 范围调整后清矿道完工缓存 + 清挖尽标志（2026-09-04 修正：半径变大 → 深度底下移 → 竖井还有更深的新活，
+    // 矿井需重新激活；玩家重新分配女仆后即恢复干活）
     @Override
     public void setRadius(int radius)
     {
         super.setRadius(radius);
         tunnelDone.clear();
-        LOGGER.info("[MineDebug] 矿井范围调整为 {}，矿道完工缓存已清（矿道将按新范围重查）", radius);
+        exhausted = false;
+        LOGGER.info("[MineDebug] 矿井范围调整为 {}，矿道完工缓存已清、挖尽状态已重置", radius);
+    }
+
+    // Home 锚点 = 范围盒几何中心、半径 = 覆盖整盒（2026-09-04 修正：矿井往下深度可达 2×半径，
+    // 以矿井方块为家会让底层女仆出界，被 TLM 反复拉回导致来回横跳）
+    @Override
+    protected BlockPos homeAnchor()
+    {
+        BlockPos min = getMinCorner();
+        BlockPos max = getMaxCorner();
+        return new BlockPos((min.getX() + max.getX()) / 2, (min.getY() + max.getY()) / 2,
+                (min.getZ() + max.getZ()) / 2);
+    }
+
+    @Override
+    protected int homeRadius()
+    {
+        return Math.max(getRadius() * 2, 16);
     }
 
     // 光源判定（B2 拍板 2026-09-04 修正：只认火把——灯笼无法贴墙挂放，待后续单独立项支持）
