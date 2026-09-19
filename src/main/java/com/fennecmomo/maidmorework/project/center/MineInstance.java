@@ -688,7 +688,7 @@ public class MineInstance extends ProjectCenterInstance
         floor.add(new BlockPos(x, h, z));
     }
 
-    // 一条横道的火把位（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
+    // 一条横道的火把位（2026-09-04 拍板：主道中心交叉点 1 根，之后往两侧每 6 格 1 根（两灯之间空 5 格），插在地板上）
     //   alongX=true：火把行固定 fixedCoord=z，中心 centerCoord=cx，范围 from..to = 范围 X
     //   alongX=false：火把列固定 fixedCoord=x，中心 centerCoord=cz，范围 from..to = 范围 Z
     private static void addLaneTorches(ServerLevel level, boolean skipOpenAir, Set<BlockPos> torches, boolean alongX,
@@ -700,12 +700,12 @@ public class MineInstance extends ProjectCenterInstance
             {
                 torches.add(new BlockPos(centerCoord, h + 1, fixedCoord));
             }
-            for (int k = 3; centerCoord - k >= from; k += 3)
+            for (int k = 6; centerCoord - k >= from; k += 6)
             {
                 if (skipOpenAir && isOpenColumn(level, centerCoord - k, fixedCoord, h)) continue;
                 torches.add(new BlockPos(centerCoord - k, h + 1, fixedCoord));
             }
-            for (int k = 3; centerCoord + k <= to; k += 3)
+            for (int k = 6; centerCoord + k <= to; k += 6)
             {
                 if (skipOpenAir && isOpenColumn(level, centerCoord + k, fixedCoord, h)) continue;
                 torches.add(new BlockPos(centerCoord + k, h + 1, fixedCoord));
@@ -717,12 +717,12 @@ public class MineInstance extends ProjectCenterInstance
             {
                 torches.add(new BlockPos(fixedCoord, h + 1, centerCoord));
             }
-            for (int k = 3; centerCoord - k >= from; k += 3)
+            for (int k = 6; centerCoord - k >= from; k += 6)
             {
                 if (skipOpenAir && isOpenColumn(level, fixedCoord, centerCoord - k, h)) continue;
                 torches.add(new BlockPos(fixedCoord, h + 1, centerCoord - k));
             }
-            for (int k = 3; centerCoord + k <= to; k += 3)
+            for (int k = 6; centerCoord + k <= to; k += 6)
             {
                 if (skipOpenAir && isOpenColumn(level, fixedCoord, centerCoord + k, h)) continue;
                 torches.add(new BlockPos(fixedCoord, h + 1, centerCoord + k));
@@ -781,7 +781,7 @@ public class MineInstance extends ProjectCenterInstance
             bestType = type;
         }
         // 2) 火把候选（2026-09-04 拍板：火把并入派发、谁近做谁——矿道不露天，挖到哪亮到哪防刷怪；
-        //    主道中心交叉点 1 根，之后往两侧每 3 格 1 根，插在地板上）
+        //    主道中心交叉点 1 根，之后往两侧每 6 格 1 根（两灯之间空 5 格），插在地板上）
         BlockPos bestTorch = null;
         MineTask.Type bestTorchType = null;
         double bestTorchDist = Double.MAX_VALUE;
