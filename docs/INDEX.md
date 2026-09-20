@@ -1,6 +1,6 @@
 # MaidMoreWork 文档
 
-> 版本：0.1.2 | MC 26.1.2 / NeoForge | JDK 25
+> 版本：0.2.0 | MC 26.1.2 / NeoForge | JDK 25
 
 Touhou Little Maid 扩展模组，为女仆新增伐木和采矿两种工作类型。
 

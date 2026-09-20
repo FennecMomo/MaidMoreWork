@@ -93,3 +93,12 @@
 | 1 | 激活面板未显示图标和介绍 | ActivationHud 当前只渲染 displayName 和 description 文本，没有渲染 IProjectType.icon() |
 | 2 | 类型切换按钮未做边界禁用 | 只有1个类型时，左/右按钮应置为禁用状态（首个时左禁用，末个时右禁用），当前所有状态均可点击，末个点右会回到首个 |
 | 3 | 右键方块一律打开编辑面板 | 之前逻辑：标记工具右键打开编辑面板，其他情况右键输出聊天栏信息；现在 useWithoutItem 对所有右键都直接发 Payload 打开面板
+
+## 矿井仓库 UI 反馈 (2026-09-20)
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | 角标不显示真实总数，显示原版 64 + 一层黑色遮罩 | ① 展示堆被钳到 min(total,64)，原版画的就是 64；② 角标文字用 6 位色 `0xFFFFFF`（alpha=0），26.x `GuiGraphicsExtractor.text` 直接跳过不渲染，只剩 `fill(0x80000000)` 黑罩 | `WarehouseScreen` 删除事后盖罩，改覆写 `renderSlotContents`，把真实总数作为原版 countText 传入（原版 `-1` 不透明白绘制） |
+| 2 | 大总数会截断（潜在，未实测） | `SimpleContainerData` 经 `ClientboundContainerSetDataPacket.writeShort` 同步，>32767 会被截断变负 | 计数数据槽拆 lo/hi 两段（DATA_SIZE=92），`totalAt` 按 32 位还原 |
+| 3 | 角标数字过长会显示不下 | — | 按 k/M/B 截断缩写（最长 4 字形）：999 / 1.5k / 12k / 2.0M / 2.1B；角标字号改原版 0.5x（pose 缩放自绘，空串抑制原版堆数量），数字底边对齐槽底（vanilla 数字底边 = y+16，首版锚行顶偏上）；悬停 tooltip 附灰色"总计 N"精确值 |
+| 4 | 页码/翻页不用物品槽，改真 UI | — | 移除 9 个控制行槽位（菜单内容槽 0..44）；屏幕端用 `Button` 控件（上一页/下一页，不可翻置灰）+ 居中页码文本；翻页经 `clickMenuButton`（ServerboundContainerButtonClickPacket）在服务端改页；工具条底用面板底色 0xFFC6C6C6 盖掉原槽位贴图 |

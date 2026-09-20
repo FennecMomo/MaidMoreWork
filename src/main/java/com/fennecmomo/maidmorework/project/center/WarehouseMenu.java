@@ -5,49 +5,47 @@ import java.util.List;
 
 import com.fennecmomo.maidmorework.project.mine.MineCenterRegistration;
 
-import net.minecraft.core.NonNullList;
 import net.minecraft.network.RegistryFriendlyByteBuf;
-import net.minecraft.network.chat.Component;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 
 // 矿井仓库界面（2026-09-04 拍板，Tom's Storage/AE 风格）：
-//   布局 = 1 行控制位（上一页 / 页码 / 下一页）+ 5 行内容（每页 45 个聚合条目）+ 玩家背包；
-//   一型一格：同型同组件聚合成一个条目，右下角显示总数（>64 时由屏幕端画角标）；
-//   全部条目分页翻看，不再"只显示一部分"。请求处理：内容槽全部由本菜单接管（点击取一组、
-//   右键取半组、拿着物品点击存入、Shift 从背包整组存入、Shift 从仓库取一组进背包）。
+//   布局 = 顶部工具条（屏幕端真按钮翻页 + 页码文本）+ 5 行内容（每页 45 个聚合条目）+ 玩家背包；
+//   一型一格：同型同组件聚合成一个条目，右下角显示总数（k/M/B 缩写，屏幕端角标）；
+//   全部条目分页翻看。请求处理：内容槽全部由本菜单接管（点击取一组、右键取半组、
+//   拿着物品点击存入、Shift 从背包整组存入、Shift 从仓库取一组进背包）；
+//   翻页按钮走 clickMenuButton（ServerboundContainerButtonClickPacket），页状态在服务端。
 public class WarehouseMenu extends AbstractContainerMenu
 {
-    public static final int CONTROL_SLOTS = 9;                  // 控制行
     public static final int PAGE_ROWS = 5;                      // 内容行
     public static final int PAGE_SLOTS = PAGE_ROWS * 9;         // 每页 45
-    public static final int CONTENT_START = CONTROL_SLOTS;      // 9
-    public static final int CONTENT_END = CONTENT_START + PAGE_SLOTS;   // 54
+    public static final int CONTENT_START = 0;                  // 内容槽起始（不再有控制行槽）
+    public static final int CONTENT_END = PAGE_SLOTS;           // 45
 
-    private static final int DATA_COUNTS = 0;                   // [0,45) 每格总数
-    private static final int DATA_PAGE = PAGE_SLOTS;            // 当前页（0 基）
-    private static final int DATA_PAGES = PAGE_SLOTS + 1;       // 总页数
-    private static final int DATA_SIZE = PAGE_SLOTS + 2;
+    // 翻页按钮 id（clickMenuButton）
+    public static final int BUTTON_PREV = 0;
+    public static final int BUTTON_NEXT = 1;
 
-    private static final int BTN_PREV = 0;
-    private static final int LABEL_PAGE = 4;
-    private static final int BTN_NEXT = 8;
+    // 数据槽：总数拆 lo/hi 两个槽（ClientboundContainerSetDataPacket 用 writeShort 同步，
+    // 单槽 >32767 会被截断成负数，故 32 位拆两个 16 位段）
+    private static final int DATA_COUNTS_LO = 0;                        // [0,45) 每格总数低 16 位
+    private static final int DATA_COUNTS_HI = PAGE_SLOTS;               // [45,90) 每格总数高 16 位
+    private static final int DATA_PAGE = PAGE_SLOTS * 2;                // 90 当前页（0 基）
+    private static final int DATA_PAGES = PAGE_SLOTS * 2 + 1;           // 91 总页数
+    private static final int DATA_SIZE = PAGE_SLOTS * 2 + 2;
 
     private static final int MAX_PER_ACTION = 64;               // 单次点击最多取一组
 
     private final ProjectCenterInstance center;                 // 客户端为 null
     private final WarehouseStorage storage;                     // 客户端为 null
     private final Container display;                            // 内容槽渲染容器（服务端=聚合视图）
-    private final SimpleContainer controls = new SimpleContainer(CONTROL_SLOTS);
     private final SimpleContainerData data = new SimpleContainerData(DATA_SIZE);
     private List<WarehouseStorage.Entry> entries = List.of();
     private int page = 0;
@@ -66,10 +64,6 @@ public class WarehouseMenu extends AbstractContainerMenu
         this.storage = center != null ? new WarehouseStorage(center) : null;
         this.display = center != null ? new AggregateDisplay() : new SimpleContainer(PAGE_SLOTS);
 
-        for (int i = 0; i < CONTROL_SLOTS; i++)
-        {
-            this.addSlot(new LockedSlot(this.controls, i, 8 + i * 18, 18));
-        }
         for (int row = 0; row < PAGE_ROWS; row++)
         {
             for (int col = 0; col < 9; col++)
@@ -105,35 +99,28 @@ public class WarehouseMenu extends AbstractContainerMenu
         for (int i = 0; i < PAGE_SLOTS; i++)
         {
             int idx = base + i;
-            data.set(DATA_COUNTS + i, idx < entries.size() ? Math.min(entries.get(idx).total(), Integer.MAX_VALUE) : 0);
+            int total = idx < entries.size() ? Math.min(entries.get(idx).total(), Integer.MAX_VALUE) : 0;
+            data.set(DATA_COUNTS_LO + i, total & 0xFFFF);
+            data.set(DATA_COUNTS_HI + i, (total >>> 16) & 0xFFFF);
         }
         data.set(DATA_PAGE, page);
         data.set(DATA_PAGES, pages);
-        updateControls();
-    }
-
-    private void updateControls()
-    {
-        for (int i = 0; i < CONTROL_SLOTS; i++) controls.setItem(i, ItemStack.EMPTY);
-        if (page > 0)
-        {
-            ItemStack prev = new ItemStack(Items.ARROW);
-            prev.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, Component.literal("§e上一页"));
-            controls.setItem(BTN_PREV, prev);
-        }
-        if (page + 1 < pages)
-        {
-            ItemStack next = new ItemStack(Items.ARROW);
-            next.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, Component.literal("§e下一页"));
-            controls.setItem(BTN_NEXT, next);
-        }
-        ItemStack label = new ItemStack(Items.PAPER);
-        label.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME,
-                Component.literal("§f第 §e" + (page + 1) + " §f/ §e" + pages + " §f页"));
-        controls.setItem(LABEL_PAGE, label);
     }
 
     // ===================== 交互 =====================
+
+    // 翻页按钮（屏幕端 Button 经 ServerboundContainerButtonClickPacket 到达）
+    @Override
+    public boolean clickMenuButton(Player player, int buttonId)
+    {
+        if (center == null) return false;
+        if (buttonId == BUTTON_PREV && page > 0) page--;
+        else if (buttonId == BUTTON_NEXT && page + 1 < pages) page++;
+        else return false;
+        refreshPage();
+        broadcastChanges();
+        return true;
+    }
 
     @Override
     public void clicked(int slotIndex, int buttonNum, ContainerInput input, Player player)
@@ -143,21 +130,7 @@ public class WarehouseMenu extends AbstractContainerMenu
             if (center != null) handleContentClick(slotIndex - CONTENT_START, buttonNum, input, player);
             return;
         }
-        if (slotIndex >= 0 && slotIndex < CONTROL_SLOTS)
-        {
-            if (center != null) handleControlClick(slotIndex, player);
-            return;
-        }
         super.clicked(slotIndex, buttonNum, input, player);
-    }
-
-    private void handleControlClick(int controlIndex, Player player)
-    {
-        if (controlIndex == BTN_PREV && page > 0) page--;
-        else if (controlIndex == BTN_NEXT && page + 1 < pages) page++;
-        else return;
-        refreshPage();
-        broadcastChanges();
     }
 
     private void handleContentClick(int pageIndex, int buttonNum, ContainerInput input, Player player)
@@ -233,7 +206,6 @@ public class WarehouseMenu extends AbstractContainerMenu
             }
             return ItemStack.EMPTY;
         }
-        if (slotIndex < CONTROL_SLOTS) return ItemStack.EMPTY;
 
         // 玩家背包 → 仓库（整组）
         if (center != null)
@@ -259,7 +231,9 @@ public class WarehouseMenu extends AbstractContainerMenu
     // 第 pageIndex 格的总数（来自数据槽同步；0 = 空）
     public int totalAt(int pageIndex)
     {
-        return data.get(DATA_COUNTS + pageIndex);
+        int lo = data.get(DATA_COUNTS_LO + pageIndex) & 0xFFFF;
+        int hi = data.get(DATA_COUNTS_HI + pageIndex) & 0xFFFF;
+        return (hi << 16) | lo;
     }
 
     public int currentPage()
@@ -280,25 +254,8 @@ public class WarehouseMenu extends AbstractContainerMenu
 
     // ===================== 内部类 =====================
 
-    // 控制行槽位：只显示、不可拿放
-    private static class LockedSlot extends Slot
-    {
-        LockedSlot(Container container, int index, int x, int y)
-        {
-            super(container, index, x, y);
-        }
-
-        @Override
-        public boolean mayPickup(Player player) { return false; }
-
-        @Override
-        public boolean mayPlace(ItemStack stack) { return false; }
-
-        @Override
-        public boolean isHighlightable() { return false; }
-    }
-
-    // 服务端内容槽容器：只读聚合视图（显示堆数量上限 64 便于原版渲染，真实总数走数据槽）
+    // 服务端内容槽容器：只读聚合视图（展示堆数量上限 64 仅供原版渲染，
+    // 屏幕端用 countText 角标替代为真实总数，真实总数走 lo/hi 数据槽）
     private class AggregateDisplay implements Container
     {
         @Override
