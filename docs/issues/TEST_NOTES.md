@@ -76,7 +76,7 @@
 |---|------|------|
 | 1 | BFS 遍历 LEAVES 合并两树 | `bfsLogs()` 只沿 LOGS |
 | 2 | (ServerLevel) 强转崩溃 | instanceof 守卫 |
-| 3 | momolib mod_id 大写 | `momolib` |
+| 3 | fenneclib mod_id 大写 | `fenneclib` |
 | 4 | maidtown mod_id 错误 | `maidtown` |
 | 5 | 导航失败死锁 | nav fail 删工程 + 随机游荡 |
 | 6 | SILENCE_TICKS 太长 | 40→10 |

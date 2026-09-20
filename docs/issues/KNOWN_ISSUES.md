@@ -15,12 +15,12 @@
 
 ## 2. GUI 弹窗未实现
 
-- **状态**：可改进（MomoLib 已有基础设施）
-- **期望**：用 MomoLib 的 `ConfirmPopupMenu` 替代聊天栏可点击消息
+- **状态**：可改进（FennecLib 已有基础设施）
+- **期望**：用 FennecLib 的 `ConfirmPopupMenu` 替代聊天栏可点击消息
 - **当前**：
   - 矿井确认创建 → 聊天栏可点击消息 `[确认]` `[取消]`
   - 矿井管理 → 聊天栏可点击消息 `[删除]` `[编辑]`
-- **可用资源**：`momolib.template.Data.ConfirmPopupMenu.open()` 可直接调用
+- **可用资源**：`fenneclib.template.Data.ConfirmPopupMenu.open()` 可直接调用
 - **待办**：在 `MineCommand` 中替换现有聊天消息为 ConfirmPopup
 
 ## 3. 矿井范围线框渲染未实现

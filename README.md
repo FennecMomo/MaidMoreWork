@@ -30,7 +30,7 @@
 - Minecraft 26.1.2+
 - NeoForge 26.1.2+
 - [车万女仆 (Touhou Little Maid)](https://github.com/TartaricAcid/TouhouLittleMaid) 2.0.0+
-- [MomoLib](https://github.com/FennecMomo/MomoLib)
+- [FennecLib](https://github.com/FennecMomo/FennecLib)
 
 ## 安装
 

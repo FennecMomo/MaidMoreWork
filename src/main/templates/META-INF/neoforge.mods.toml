@@ -20,7 +20,7 @@ ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.${mod_id}]]
-modId = "momolib"
+modId = "fenneclib"
 type = "required"
 versionRange = "[0.0.1,)"
 ordering = "NONE"

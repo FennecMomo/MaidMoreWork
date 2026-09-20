@@ -2,7 +2,7 @@ package com.fennecmomo.maidmorework.project.mine;
 
 import com.fennecmomo.maidmorework.project.center.ProjectCenterManager;
 import com.fennecmomo.maidmorework.project.center.MineInstance;
-import com.fennecmomo.momolib.template.Data.ConfirmPopupMenu;
+import com.fennecmomo.fenneclib.template.Data.ConfirmPopupMenu;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
