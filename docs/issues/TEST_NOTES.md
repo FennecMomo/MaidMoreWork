@@ -28,8 +28,9 @@
 | N2 | 绑定矿井中心后不显示范围 | `handleCenterBind` 仅绑定 ID；矿井 BE 默认 `boundaryVisible=false`，绑定未同步边界显隐或推送客户端边界数据 |
 | N3 | 工程中心无储物空间、伐木女仆不放产物 | 仓库（`WarehouseMenu`/`WarehouseStorage`）目前是矿井专属，挂在 `MineInstance` 上；中心基类无仓库与存放流程 |
 | N4 | 远距离时中心区块卸载重载把女仆踢出 | 待查：参与者清理的"实体在场"判定在区块卸载期间可能误判（中心 tick 驱动与区块加载无关） |
+| N5 | 排水生成的流体瓶是空瓶 | 创建链路（`clearFluidAndCollectBottle` / `checkBelowSafety`）已调用 `FluidBottleItem.setFluid`；重点查入库路径：`MineCenterBehavior.depositToWarehouse` 用 `new ItemStack(res.getItem(), amount)` 重建堆 + `probe` 判定，均丢数据组件（应用 `res.toStack(...)` 保留组件）；其次查女仆背包合并是否按组件区分 |
 
-> 对应条目：TEST_LOGGING「操作人反馈（2026-09-22）」N1–N4；全项目总览 `docs/TODO.md` F3–F6
+> 对应条目：TEST_LOGGING「操作人反馈（2026-09-22）」N1–N5；全项目总览 `docs/TODO.md` F3–F7
 
 ## 本轮新增
 
