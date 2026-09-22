@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "#": "minecraft:stick",
+    "L": "#minecraft:logs"
+  },
+  "pattern": [
+    "#  ",
+    " # ",
+    "  L"
+  ],
+  "result": {
+    "id": "maidmorework:project_center_marker"
+  }
+}

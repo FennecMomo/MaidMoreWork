@@ -1,7 +1,35 @@
 # MaidMoreWork 测试笔记
 
 > AI 维护，按轮次追加；当前待测项见 [TEST_LOGGING.md](TEST_LOGGING.md)
-> 当前轮次：文末「矿井仓库 UI 反馈 (2026-09-20)」；上方为历史轮次（归档）
+> 当前轮次：文末「合成表与类型限制 (2026-09-22)」；上方为历史轮次（归档）
+
+## 合成表与类型限制 (2026-09-22)
+
+### 本轮新增
+
+| # | 功能 | 文件 |
+|---|------|------|
+| 1 | 工程中心合成表（8 木板 + 任意石质工具） | `data/maidmorework/recipe/project_center.json` |
+| 2 | 标记工具合成表（木棍×2 + 任意原木，位置 7/5/3） | `data/maidmorework/recipe/project_center_marker.json` |
+| 3 | 矿井标记工具合成表（木棍×2 + 铜锭，位置 7/5/3） | `data/maidmorework/recipe/mine_center_marker.json` |
+| 4 | 普通工程中心禁选采矿类型 | `IProjectType.selectableInCenter()`（默认 true，采矿 false）+ 激活页过滤 + `center type` 命令守卫 |
+
+### 说明
+
+- 工程中心目前仍为「放置方块创建」（`ProjectCenterBlock.setPlacedBy`）；标记工具只负责绑定已有中心并打开激活/配置页
+- 矿井中心为「标记工具两角点框选生成」，直接放置不创建实例（`MineCenterBlock.setPlacedBy` 刻意置空）
+- 矿井类型在 `ProjectCenterManager.createMine` 创建时即定型，配置页天然跳过类型选择
+
+## 测试反馈 (2026-09-22，待修，今日不改)
+
+| # | 问题 | 初步观察 |
+|---|------|---------|
+| N1 | 挖矿道时墙上的矿没被替换成垫脚方块 | 矿道工程的挖格与保留位扫描是否覆盖墙面矿待查；REPLACE 目前收窄为仅矿物（`#c:ores`） |
+| N2 | 绑定矿井中心后不显示范围 | `handleCenterBind` 仅绑定 ID；矿井 BE 默认 `boundaryVisible=false`，绑定未同步边界显隐或推送客户端边界数据 |
+| N3 | 工程中心无储物空间、伐木女仆不放产物 | 仓库（`WarehouseMenu`/`WarehouseStorage`）目前是矿井专属，挂在 `MineInstance` 上；中心基类无仓库与存放流程 |
+| N4 | 远距离时中心区块卸载重载把女仆踢出 | 待查：参与者清理的"实体在场"判定在区块卸载期间可能误判（中心 tick 驱动与区块加载无关） |
+
+> 对应条目：TEST_LOGGING「操作人反馈（2026-09-22）」N1–N4；全项目总览 `docs/TODO.md` F3–F6
 
 ## 本轮新增
 

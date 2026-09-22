@@ -1,0 +1,22 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "#": "#minecraft:planks",
+    "T": [
+      "minecraft:stone_pickaxe",
+      "minecraft:stone_axe",
+      "minecraft:stone_shovel",
+      "minecraft:stone_hoe",
+      "minecraft:stone_sword"
+    ]
+  },
+  "pattern": [
+    "###",
+    "#T#",
+    "###"
+  ],
+  "result": {
+    "id": "maidmorework:project_center"
+  }
+}

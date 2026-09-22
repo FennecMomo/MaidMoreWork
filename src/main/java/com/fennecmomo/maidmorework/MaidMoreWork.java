@@ -50,10 +50,11 @@ public class MaidMoreWork
                     net.minecraft.resources.Identifier.fromNamespaceAndPath(MODID, "tab"));
 
     // 静态初始化块：注册创造模式标签页，添加矿井中心方块/标记工具/流体瓶/工程中心
+    // 标签页名走翻译键 itemGroup.maidmorework.tab
     static
     {
         CREATIVE_TABS.register("tab", () -> CreativeModeTab.builder()
-                .title(Component.literal("MaidMoreWork"))
+                .title(Component.translatable("itemGroup.maidmorework.tab"))
                 .icon(() -> new ItemStack(MineCenterRegistration.MINE_CENTER_MARKER.get()))
                 .displayItems((params, output) ->
                 {

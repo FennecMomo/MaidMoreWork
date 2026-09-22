@@ -49,6 +49,10 @@ public class MiningProjectType implements IProjectType
     @Override
     public Identifier taskUid() { return MiningTask.UID; }
 
+    // 矿井类型只能由标记工具创建流程定型，不允许在普通工程中心激活页选择
+    @Override
+    public boolean selectableInCenter() { return false; }
+
     @Override
     public boolean isValidTarget(ServerLevel level, BlockPos pos)
     {

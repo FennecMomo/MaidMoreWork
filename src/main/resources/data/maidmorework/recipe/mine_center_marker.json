@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "#": "minecraft:stick",
+    "C": "minecraft:copper_ingot"
+  },
+  "pattern": [
+    "#  ",
+    " # ",
+    "  C"
+  ],
+  "result": {
+    "id": "maidmorework:mine_center_marker"
+  }
+}

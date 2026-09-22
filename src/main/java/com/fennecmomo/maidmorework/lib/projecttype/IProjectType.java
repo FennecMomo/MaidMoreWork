@@ -23,6 +23,12 @@ public interface IProjectType
     Component description();
     Identifier taskUid();
 
+    // 是否可在普通工程中心激活页选择（矿井等专用类型返回 false）
+    default boolean selectableInCenter()
+    {
+        return true;
+    }
+
     // 目标词条（如砍树→"原木"），供气泡文案等通用文案使用
     // 未覆写时回落 displayName（动作名）
     default Component targetName()

@@ -1,7 +1,10 @@
 {
+  "itemGroup.maidmorework.tab": "MaidMoreWork",
   "block.maidmorework.mine_center": "Mine Center",
+  "block.maidmorework.project_center": "Project Center",
   "block.maidmorework.mine_layer_control": "Mine Layer Control",
   "item.maidmorework.mine_center_marker": "Mine Center Marker Tool",
+  "item.maidmorework.project_center_marker": "Project Center Marker Tool",
   "item.maidmorework.fluid_bottle": "Fluid Bottle",
   "item.maidmorework.mining_maid_spawn_egg": "Mining Maid Spawn Egg (Test)",
   "item.maidmorework.fluid_bottle.empty": "Empty Bottle",

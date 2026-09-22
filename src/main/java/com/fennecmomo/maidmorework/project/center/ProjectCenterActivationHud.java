@@ -33,7 +33,10 @@ public class ProjectCenterActivationHud extends Screen
     @Override
     protected void init()
     {
-        types = ProjectTypeRegistry.getAll();
+        // 只列可被普通工程中心选择的类型（矿井等专用类型不出现）
+        types = ProjectTypeRegistry.getAll().stream()
+                .filter(IProjectType::selectableInCenter)
+                .toList();
         if (types.isEmpty())
         {
             return;

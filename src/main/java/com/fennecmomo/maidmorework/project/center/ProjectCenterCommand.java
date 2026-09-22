@@ -3,6 +3,7 @@ package com.fennecmomo.maidmorework.project.center;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.fennecmomo.maidmorework.lib.projecttype.IProjectType;
 import com.fennecmomo.maidmorework.lib.projecttype.ProjectTypeRegistry;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -157,9 +158,17 @@ public class ProjectCenterCommand
         ServerPlayer player = source.getPlayer();
         if (player == null) return 0;
 
-        if (ProjectTypeRegistry.get(typeId) == null)
+        IProjectType type = ProjectTypeRegistry.get(typeId);
+        if (type == null)
         {
             player.sendSystemMessage(Component.literal("§c未知的工程类型: " + typeId));
+            return 0;
+        }
+
+        // 专用类型（如采矿）不允许通过普通工程中心选择，只能由各自创建流程定型
+        if (!type.selectableInCenter())
+        {
+            player.sendSystemMessage(Component.literal("§c该类型不能在工程中心中选择: " + typeId));
             return 0;
         }
 

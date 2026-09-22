@@ -1,7 +1,10 @@
 {
+  "itemGroup.maidmorework.tab": "女仆的更多工作",
   "block.maidmorework.mine_center": "矿井中心",
+  "block.maidmorework.project_center": "工程中心",
   "block.maidmorework.mine_layer_control": "矿道层控制方块",
   "item.maidmorework.mine_center_marker": "矿井标记工具",
+  "item.maidmorework.project_center_marker": "标记工具",
   "item.maidmorework.fluid_bottle": "液体瓶",
   "item.maidmorework.mining_maid_spawn_egg": "挖矿女仆刷怪蛋（测试）",
   "item.maidmorework.fluid_bottle.empty": "空瓶",
