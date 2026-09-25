@@ -20,7 +20,7 @@ import java.util.UUID;
 // 工程中心方块（桥）
 //
 // 只负责静态行为：放置时创建中心实例、右键交互
-// 拆除时由方块实体的 setRemoved 通知 ProjectCenterManager 删除中心
+// 拆除时由方块实体的 preRemoveSideEffects 通知 ProjectCenterManager 删除中心
 // 不再挂 ticker：业务由 ProjectCenterManager 全局驱动
 public class ProjectCenterBlock extends BaseEntityBlock
 {

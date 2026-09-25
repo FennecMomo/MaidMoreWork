@@ -205,23 +205,23 @@ public class ProjectCenterBlockEntity extends BlockEntity implements IRegionalMa
         }
     }
 
-    // 仅方块被移除/替换时触发（chunk 卸载与世界关闭都不会调用）
-    // → 安全的"删除中心"信号
-    // 例外：退出序列中 LevelChunk 的清理路径会触发 setRemoved（已由日志证实），
-    // 此时走关服标志跳过删除，避免清空内存数据导致空档存档
+    // MC 26 的区块卸载也会调用 setRemoved；只有真正替换方块时才删除中心。
+    @Override
+    public void preRemoveSideEffects(BlockPos pos, BlockState state)
+    {
+        if (hasInstance() && level instanceof ServerLevel serverLevel
+                && !ProjectCenterManager.isShuttingDown())
+        {
+            ProjectCenterManager.deleteById(serverLevel, getId());
+        }
+        super.preRemoveSideEffects(pos, state);
+    }
+
     @Override
     public void setRemoved()
     {
         super.setRemoved();
-        if (!hasInstance() || level == null) return;
-        if (!level.isClientSide())
-        {
-            if (!ProjectCenterManager.isShuttingDown())
-            {
-                ProjectCenterManager.deleteById((ServerLevel) level, getId());
-            }
-        }
-        RegionalManagerRegistry.unregister(getId());
+        if (hasInstance()) RegionalManagerRegistry.unregister(getId());
     }
 
     // ===================== NBT =====================

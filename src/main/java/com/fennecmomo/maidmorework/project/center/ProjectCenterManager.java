@@ -52,8 +52,7 @@ public final class ProjectCenterManager
     // 孤儿清扫节流（每 200 tick 一次）
     private static int sweepCounter = 0;
 
-    // 关服标志：服务器停止、维度卸载时置位，方块实体的 setRemoved 不再触发 deleteById
-    // （退出序列中 BE.setRemoved 会被触发，若先于保存编码执行会清空内存数据导致空档）
+    // 关服标志：服务器停止、维度卸载时置位，避免关闭过程中处理方块替换副作用。
     private static volatile boolean shuttingDown = false;
 
     private ProjectCenterManager() {}
@@ -195,7 +194,7 @@ public final class ProjectCenterManager
         e.byId().put(id, inst);
     }
 
-    // 删除中心（方块拆除时由 BE.setRemoved 调用，幂等；关服流程中不执行）
+    // 删除中心（方块拆除时由 BE.preRemoveSideEffects 调用，幂等；关服流程中不执行）
     public static void deleteById(ServerLevel level, UUID id)
     {
         Entry e = entry(level);
