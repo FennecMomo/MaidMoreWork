@@ -619,14 +619,15 @@ public class ChopBehavior extends Behavior<EntityMaid>
         ItemStack oldHand = maid.getMainHandItem();
         try (Transaction tx = Transaction.openRoot())
         {
-            inv.extract(bestSlot, bestRes, 1, tx);
+            if (inv.extract(bestSlot, bestRes, 1, tx) != 1) return;
             if (!oldHand.isEmpty())
             {
-                inv.insert(bestSlot, ItemResource.of(oldHand), oldHand.getCount(), tx);
+                if (inv.insert(bestSlot, ItemResource.of(oldHand), oldHand.getCount(), tx)
+                        != oldHand.getCount()) return;
             }
             tx.commit();
         }
-        maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(bestRes.getItem(), 1));
+        maid.setItemSlot(EquipmentSlot.MAINHAND, bestRes.toStack(1));
     }
 
     private void clearAllMemory(EntityMaid maid)

@@ -842,10 +842,11 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         ItemStacksResourceHandler inv = maid.getItemManager().getMaidInv();
         try (Transaction tx = Transaction.openRoot())
         {
-            inv.extract(candidate.slot(), candidate.res(), 1, tx);
+            if (inv.extract(candidate.slot(), candidate.res(), 1, tx) != 1) return;
             if (!oldHand.isEmpty())
             {
-                inv.insert(candidate.slot(), ItemResource.of(oldHand), oldHand.getCount(), tx);
+                if (inv.insert(candidate.slot(), ItemResource.of(oldHand), oldHand.getCount(), tx)
+                        != oldHand.getCount()) return;
             }
             tx.commit();
         }
@@ -873,7 +874,7 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         {
             ItemResource res = inv.getResource(i);
             if (res.isEmpty()) continue;
-            ItemStack probe = new ItemStack(res.getItem(), 1);
+            ItemStack probe = res.toStack(1);
             if (probe.is(ItemTags.PICKAXES)) continue;      // 工具不存
             Category cat = isScaffoldItem(probe) ? Category.SCAFFOLD
                     : isLightItem(probe) ? Category.LIGHT : Category.OTHER;
@@ -1489,14 +1490,15 @@ public class MineCenterBehavior extends Behavior<EntityMaid>
         ItemStack oldHand = maid.getMainHandItem();
         try (Transaction tx = Transaction.openRoot())
         {
-            inv.extract(bestSlot, bestRes, 1, tx);
+            if (inv.extract(bestSlot, bestRes, 1, tx) != 1) return;
             if (!oldHand.isEmpty())
             {
-                inv.insert(bestSlot, ItemResource.of(oldHand), oldHand.getCount(), tx);
+                if (inv.insert(bestSlot, ItemResource.of(oldHand), oldHand.getCount(), tx)
+                        != oldHand.getCount()) return;
             }
             tx.commit();
         }
-        maid.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(bestRes.getItem(), 1));
+        maid.setItemSlot(EquipmentSlot.MAINHAND, bestRes.toStack(1));
     }
 
     private void showBubbleWithCooldown(EntityMaid maid, String text, long key)

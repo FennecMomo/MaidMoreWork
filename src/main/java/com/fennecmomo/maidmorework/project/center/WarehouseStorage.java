@@ -59,7 +59,7 @@ public final class WarehouseStorage
     // 取出：从仓库里按模板分摊移除最多 amount 个，返回实际取出的堆
     public ItemStack take(ItemStack template, int amount)
     {
-        int remaining = Math.min(amount, 64);
+        int remaining = Math.min(amount, Math.min(64, template.getMaxStackSize()));
         if (remaining <= 0) return ItemStack.EMPTY;
         ItemStack result = template.copyWithCount(0);
         List<ItemStack> warehouse = center.getWarehouse();

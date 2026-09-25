@@ -153,7 +153,10 @@ public class WarehouseMenu extends AbstractContainerMenu
             if (buttonNum < 0 || buttonNum >= 9) return;
             ItemStack hotbar = player.getInventory().getItem(buttonNum);
             if (!hotbar.isEmpty() && !ItemStack.isSameItemSameComponents(hotbar, entry.template())) return;
-            ItemStack taken = storage.take(entry.template(), Math.min(entry.total(), MAX_PER_ACTION));
+            int capacity = hotbar.isEmpty() ? entry.template().getMaxStackSize()
+                    : hotbar.getMaxStackSize() - hotbar.getCount();
+            if (capacity <= 0) return;
+            ItemStack taken = storage.take(entry.template(), Math.min(capacity, MAX_PER_ACTION));
             if (taken.isEmpty()) return;
             if (hotbar.isEmpty()) player.getInventory().setItem(buttonNum, taken);
             else hotbar.grow(taken.getCount());

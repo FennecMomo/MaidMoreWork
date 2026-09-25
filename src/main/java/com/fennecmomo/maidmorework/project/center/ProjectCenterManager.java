@@ -10,6 +10,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.network.PacketDistributor;
 
@@ -199,6 +201,19 @@ public final class ProjectCenterManager
         Entry e = entry(level);
         ProjectCenterInstance removed = e.byId().remove(id);
         if (removed == null) return;
+
+        // 仓库只存在 SavedData 实例中；删除实例前必须把物品归还到世界。
+        BlockPos dropPos = removed.getBlockPos();
+        for (ItemStack stack : removed.getWarehouse())
+        {
+            ItemStack remaining = stack.copy();
+            while (!remaining.isEmpty())
+            {
+                int count = Math.min(remaining.getCount(), remaining.getMaxStackSize());
+                Block.popResource(level, dropPos, remaining.copyWithCount(count));
+                remaining.shrink(count);
+            }
+        }
 
         // 矿道层控制方块随矿井中心销毁（2026-09-04 拍板）
         if (removed instanceof MineInstance mine)
